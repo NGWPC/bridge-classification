@@ -1,0 +1,960 @@
+"""
+Bridge Classification Model Training - Data Loader with Voxelization
+
+This module provides a data loader for bridge point cloud classification with:
+- Proper voxelization with feature aggregation and majority-vote labeling
+- Support for HUC-organized directory structure
+- Visualization tools to verify voxelization correctness
+- PyTorch Lightning training integration
+
+Usage:
+    # Test data loader
+    python src/train.py --data-dir ./data/ml-data/silver_training_normalized
+
+    # Visualize voxelization
+    python src/train.py --visualize --sample-idx 0
+
+    # Custom voxel size
+    python src/train.py --voxel-size 0.1 --visualize
+
+    # Train model
+    python src/train.py --train --data-dir ./data/ml-data/silver_training_normalized --epochs 50
+"""
+
+import os
+import argparse
+from pathlib import Path
+from typing import Dict, Tuple, List, Optional
+from collections import Counter
+
+import numpy as np
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+
+from lightning.pytorch.loggers import TensorBoardLogger, CSVLogger
+
+try:
+    from torchview import draw_graph
+    import spconv.pytorch as spconv
+    HAS_TORCHVIEW = True
+except ImportError:
+    HAS_TORCHVIEW = False
+    print("Warning: torchview not available. Network graph disabled.")
+
+# Suppress warnings
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+try:
+    import pytorch_lightning as pl
+    from pytorch_lightning import LightningModule, LightningDataModule, Trainer
+    from pytorch_lightning.callbacks import ModelCheckpoint
+    HAS_LIGHTNING = True
+except ImportError:
+    HAS_LIGHTNING = False
+    print("Warning: pytorch_lightning not available. Training disabled.")
+
+try:
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D
+    HAS_MATPLOTLIB = True
+except ImportError as e:
+    HAS_MATPLOTLIB = False
+    print("Warning: matplotlib not available. Visualization disabled. \nError: ", e)
+
+# Import model
+from model import SparseUNet
+
+
+# Class label mapping for visualization
+CLASS_COLORS = {
+    0: 'black',    # Background/Unclassified
+    1: 'green',    # Ground
+    2: 'blue',     # Water
+    3: 'red',      # Bridge Deck
+    4: 'yellow'    # Obstacles/High Noise
+}
+
+CLASS_NAMES = {
+    0: 'Background',
+    1: 'Ground',
+    2: 'Water',
+    3: 'Bridge Deck',
+    4: 'Obstacles'
+}
+
+
+def aggregate_voxel_points(xyz: np.ndarray, features: np.ndarray, labels: np.ndarray,
+                          voxel_coords: np.ndarray, voxel_size: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Aggregate points within each voxel.
+
+    For each voxel:
+    - Features: Average intensity across all points
+    - Coordinates: Use voxel center (discrete_coords * voxel_size + voxel_size/2)
+    - Labels: Majority vote (most common label in voxel)
+
+    Args:
+        xyz: Original point coordinates (N, 3)
+        features: Point features (N, 1) - intensity
+        labels: Point labels (N,)
+        voxel_coords: Discrete voxel coordinates (N, 3)
+        voxel_size: Size of each voxel in meters
+
+    Returns:
+        Tuple of (aggregated_xyz, aggregated_features, aggregated_labels)
+    """
+    # Convert voxel_coords to tuple for grouping
+    voxel_keys = [tuple(vc) for vc in voxel_coords]
+
+    # Group points by voxel
+    voxel_groups = {}
+    for i, key in enumerate(voxel_keys):
+        if key not in voxel_groups:
+            voxel_groups[key] = []
+        voxel_groups[key].append(i)
+
+    # Aggregate each voxel
+    aggregated_xyz = []
+    aggregated_features = []
+    aggregated_labels = []
+
+    for voxel_key, point_indices in voxel_groups.items():
+        # Get points in this voxel
+        voxel_points = xyz[point_indices]
+        voxel_features = features[point_indices]
+        voxel_labels = labels[point_indices]
+
+        # Average features (intensity)
+        avg_feature = np.mean(voxel_features, axis=0)
+
+        # Majority vote for label
+        label_counts = Counter(voxel_labels)
+        majority_label = label_counts.most_common(1)[0][0]
+
+        # Use voxel center as coordinate
+        # Convert discrete voxel coords back to continuous space
+        voxel_center = np.array(voxel_key) * voxel_size + voxel_size / 2.0
+
+        aggregated_xyz.append(voxel_center)
+        aggregated_features.append(avg_feature)
+        aggregated_labels.append(majority_label)
+
+    return (
+        np.array(aggregated_xyz, dtype=np.float32),
+        np.array(aggregated_features, dtype=np.float32),
+        np.array(aggregated_labels, dtype=np.int64)
+    )
+
+
+class BridgeDataset(Dataset):
+    """
+    Dataset for bridge point cloud classification with voxelization.
+
+    Handles HUC-organized directory structure and properly aggregates
+    points within voxels using majority vote for labels and averaging for features.
+    """
+
+    def __init__(self, data_dir: str, voxel_size: float = 0.05, augment: bool = False):
+        """
+        Args:
+            data_dir: Path to directory containing .npy files (can be HUC-organized)
+            voxel_size: Voxel size in meters (e.g., 0.05 for 5cm)
+            augment: Whether to apply random rotations/scaling
+        """
+        self.data_dir = Path(data_dir)
+        self.voxel_size = voxel_size
+        self.augment = augment
+
+        # Recursively find all .npy files (handles HUC folder structure)
+        self.files = sorted(list(self.data_dir.rglob("*.npy")))
+
+        if not self.files:
+            raise ValueError(f"No .npy files found in {data_dir}")
+
+        # Define the ignore label (Background/Unclassified)
+        self.ignore_label = 0
+
+        print(f"Found {len(self.files)} bridge files in {data_dir}")
+
+    def __len__(self) -> int:
+        return len(self.files)
+
+    def __getitem__(self, idx: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Load and voxelize a single bridge sample.
+
+        Returns:
+            Tuple of (discrete_coords, features, labels)
+            - discrete_coords: (N_voxels, 3) integer voxel coordinates
+            - features: (N_voxels, 1) averaged intensity per voxel
+            - labels: (N_voxels,) majority-vote labels per voxel
+        """
+        file_path = self.files[idx]
+
+        # 1. Load Data
+        data = np.load(file_path)  # Shape: (N, 5) -> [x, y, z, intensity, label]
+
+        # Split into components
+        xyz = data[:, 0:3]
+        feat = data[:, 3:4]  # Intensity is the only feature for now
+        labels = data[:, 4].astype(np.int64)
+
+        # Your preprocessing centers data at the mean (e.g., -50 to +50).
+        # SpConv indices MUST be positive (0 to 100)?
+        # We shift the min value to 0.0 for every sample.
+        # xyz -= xyz.min(axis=0)
+
+
+        # 2. Data Augmentation (Optional)
+        if self.augment:
+            # Random rotation around Z-axis
+            theta = np.random.uniform(0, 2 * np.pi)
+            rotation_matrix = np.array([
+                [np.cos(theta), -np.sin(theta), 0],
+                [np.sin(theta),  np.cos(theta), 0],
+                [0,              0,             1]
+            ])
+            xyz = xyz @ rotation_matrix
+
+            # Random jitter
+            jitter = np.random.normal(0, 0.01, size=xyz.shape)
+            xyz += jitter
+
+            # Re-shift to positive after rotation (rotation can make things negative again)
+            # xyz -= xyz.min(axis=0)
+
+        # 3. Quantization (Voxelization)
+        # Divide by voxel size and floor to get integer grid coordinates
+        discrete_coords = np.floor(xyz / self.voxel_size).astype(np.int32)
+
+        # 4. Aggregate points within voxels
+        aggregated_xyz, aggregated_features, aggregated_labels = aggregate_voxel_points(
+            xyz, feat, labels, discrete_coords, self.voxel_size
+        )
+
+        # 5. Re-quantize aggregated coordinates to get final discrete coords
+        final_discrete_coords = np.floor(aggregated_xyz / self.voxel_size).astype(np.int32)
+
+        return final_discrete_coords, aggregated_features, aggregated_labels
+
+
+def sparse_collate_fn(batch: List[Tuple[np.ndarray, np.ndarray, np.ndarray]]) -> Dict[str, torch.Tensor]:
+    """
+    Custom collate function to create a batch for sparse tensor format.
+
+    Sparse tensors require coordinate format: [Batch_ID, X, Y, Z]
+
+    Args:
+        batch: List of (coords, features, labels) tuples
+
+    Returns:
+        Dictionary with keys:
+        - coordinates: (N_total, 4) tensor [batch_id, x, y, z]
+        - features: (N_total, 1) tensor
+        - labels: (N_total,) tensor
+    """
+    batch_coords = []
+    batch_feats = []
+    batch_labels = []
+
+    for batch_id, (coords, feats, labels) in enumerate(batch):
+        # Append the Batch ID as the first column of the coordinates
+        # Shape becomes (N, 4): [Batch_ID, X, Y, Z]
+        b_idx = np.full((coords.shape[0], 1), batch_id, dtype=np.int32)
+        batched_c = np.hstack([b_idx, coords])
+
+        batch_coords.append(batched_c)
+        batch_feats.append(feats)
+        batch_labels.append(labels)
+
+    # Concatenate all lists into single big tensors
+    coords_tensor = torch.from_numpy(np.vstack(batch_coords)).int()
+    feats_tensor = torch.from_numpy(np.vstack(batch_feats)).float()
+    labels_tensor = torch.from_numpy(np.hstack(batch_labels)).long()
+
+    return {
+        "coordinates": coords_tensor,
+        "features": feats_tensor,
+        "labels": labels_tensor
+    }
+
+
+# PyTorch Lightning Components
+if HAS_LIGHTNING:
+    import spconv.pytorch as spconv
+
+    class BridgeLightningModule(LightningModule):
+        """
+        PyTorch Lightning module for bridge classification training.
+        """
+
+        def __init__(
+            self,
+            input_channels=1,
+            num_classes=5,
+            base_channels=16,
+            learning_rate=0.001,
+            weight_decay=0.01,
+            class_weights=None,
+        ):
+            """
+            Args:
+                input_channels: Number of input features (default: 1)
+                num_classes: Number of output classes (default: 5)
+                base_channels: Base number of channels (default: 16)
+                learning_rate: Learning rate for optimizer (default: 0.001)
+                weight_decay: Weight decay for optimizer (default: 0.01)
+                class_weights: Class weights for loss function (default: None)
+            """
+            super().__init__()
+            self.save_hyperparameters()
+
+            self.model = SparseUNet(
+                input_channels=input_channels,
+                num_classes=num_classes,
+                base_channels=base_channels
+            )
+
+            self.learning_rate = learning_rate
+            self.weight_decay = weight_decay
+
+            # Default class weights: [Background, Ground, Water, Deck, Obstacle]
+            if class_weights is None:
+                class_weights = [0.1, 0.5, 0.5, 2.0, 1.5]
+
+            self.register_buffer('class_weights', torch.tensor(class_weights, dtype=torch.float32))
+            self.criterion = nn.CrossEntropyLoss(weight=self.class_weights)
+
+        def forward(self, x):
+            """Forward pass."""
+            return self.model(x)
+
+        def _common_step(self, batch, batch_idx, prefix):
+            """
+            Shared logic for train and validation.
+
+            Args:
+                batch: Batch dictionary containing coordinates, features, and labels
+                batch_idx: Index of batch
+                prefix: Prefix for logging (train or val)
+            """
+            coords = batch['coordinates']  # (N, 4) -> [BatchID, X, Y, Z]
+            feats = batch['features']      # (N, 1) -> Intensity
+            labels = batch['labels']       # (N,)
+
+            # Dynamic Shape Calculation
+            # coords[:, 1:] gets X, Y, Z columns
+            max_coords = coords[:, 1:].max(dim=0)[0]
+            # limit = max_coords + 5
+            # # Align to 32
+            # spatial_shape = ((limit + 31) // 32 * 32).int().tolist()
+
+            # Add small padding to be safe
+            spatial_shape = (max_coords + 10).int().tolist()
+
+            # Create SpConv Tensor
+            input_sp_tensor = spconv.SparseConvTensor(
+                features=feats,
+                indices=coords,
+                spatial_shape=spatial_shape,
+                batch_size=coords[:, 0].max().item() + 1
+            )
+
+            # Forward pass
+            output = self.model(input_sp_tensor)  # (N, num_classes)
+            # Loss calculation
+            loss = self.criterion(output, labels)
+
+            # Calculate Metrics
+            preds = torch.argmax(output, dim=1)
+            deck_mask = (labels == 3)
+
+            # Deck Accuracy (Recall)
+            deck_acc = 0.0
+            if deck_mask.sum() > 0:
+                correct_deck = (preds[deck_mask] == labels[deck_mask]).sum().float()
+                deck_acc = (correct_deck / deck_mask.sum().float()) * 100.0
+
+            # Overall Accuracy
+            overall_acc = (preds == labels).float().mean() * 100.0
+
+            # Logging
+            self.log(f'{prefix}_loss', loss, on_step=(prefix=='train'), on_epoch=True, prog_bar=True)
+            self.log(f'{prefix}_deck_acc', deck_acc, on_step=(prefix=='train'), on_epoch=True, prog_bar=True)
+            self.log(f'{prefix}_overall_acc', overall_acc, on_step=(prefix=='train'), on_epoch=True)
+
+            return loss
+
+        def training_step(self, batch, batch_idx):
+            """Training step."""
+            return self._common_step(batch, batch_idx, "train")
+
+        def validation_step(self, batch, batch_idx):
+            """Validation step."""
+            return self._common_step(batch, batch_idx, "val")
+
+        def configure_optimizers(self):
+            """Configure optimizer."""
+            optimizer = optim.AdamW(
+                self.parameters(),
+                lr=self.learning_rate,
+                weight_decay=self.weight_decay
+            )
+            return optimizer
+
+
+    class BridgeDataModule(LightningDataModule):
+        """
+        PyTorch Lightning data module for bridge dataset.
+        """
+
+        def __init__(
+            self,
+            data_dir: str,
+            voxel_size: float = 0.05,
+            batch_size: int = 4,
+            num_workers: int = 4,
+            augment: bool = True,
+            val_split: float = 0.0
+        ):
+            """
+            Args:
+                data_dir: Path to data directory
+                voxel_size: Voxel size in meters (default: 0.05)
+                batch_size: Batch size (default: 4)
+                num_workers: Number of data loader workers (default: 4)
+                augment: Whether to apply augmentation (default: True)
+                val_split: Validation split ratio (default: 0.0, no validation)
+            """
+            super().__init__()
+            self.data_dir = data_dir
+            self.voxel_size = voxel_size
+            self.batch_size = batch_size
+            self.num_workers = num_workers
+            self.augment = augment
+            self.val_split = val_split
+
+        def setup(self, stage=None):
+            """Setup datasets."""
+            if stage == 'fit' or stage is None:
+                # Create full dataset to get file list
+                full_dataset = BridgeDataset(
+                    self.data_dir,
+                    voxel_size=self.voxel_size,
+                    augment=False
+                )
+
+                if self.val_split > 0:
+                    # Split dataset indices
+                    dataset_size = len(full_dataset)
+                    val_size = int(dataset_size * self.val_split)
+                    train_size = dataset_size - val_size
+
+                    indices = torch.randperm(dataset_size).tolist()
+                    train_indices = indices[:train_size]
+                    val_indices = indices[train_size:]
+
+                    # Create separate datasets with appropriate augmentation
+                    self.train_dataset = BridgeDataset(
+                        self.data_dir,
+                        voxel_size=self.voxel_size,
+                        augment=self.augment
+                    )
+                    # Override file list with train indices
+                    self.train_dataset.files = [full_dataset.files[i] for i in train_indices]
+
+                    self.val_dataset = BridgeDataset(
+                        self.data_dir,
+                        voxel_size=self.voxel_size,
+                        augment=False  # No augmentation for validation
+                    )
+                    # Override file list with val indices
+                    self.val_dataset.files = [full_dataset.files[i] for i in val_indices]
+                else:
+                    # No validation split - use full dataset with augmentation
+                    self.train_dataset = BridgeDataset(
+                        self.data_dir,
+                        voxel_size=self.voxel_size,
+                        augment=self.augment
+                    )
+                    self.val_dataset = None
+
+        def train_dataloader(self):
+            """Create training dataloader."""
+            return DataLoader(
+                self.train_dataset,
+                batch_size=self.batch_size,
+                collate_fn=sparse_collate_fn,
+                shuffle=True,
+                num_workers=self.num_workers,
+                pin_memory=True
+            )
+
+        def val_dataloader(self):
+            """Create validation dataloader."""
+            if self.val_dataset is None:
+                return None
+            return DataLoader(
+                self.val_dataset,
+                batch_size=self.batch_size,
+                collate_fn=sparse_collate_fn,
+                shuffle=False,
+                num_workers=self.num_workers,
+                pin_memory=True
+            )
+
+
+def save_network_graph(model, save_dir, filename="network_architecture"):
+    """
+    Traces the model on GPU (required for spconv) and saves the graph as PNG.
+    """
+    if not torch.cuda.is_available():
+        print("CUDA not available. Skipping graph (spconv requires GPU for tracing).")
+        return
+
+    print("Generating network graph...")
+
+    # --- 1. Define Wrapper ---
+    class GraphWrapper(nn.Module):
+        def __init__(self, model):
+            super().__init__()
+            self.model = model
+
+        def forward(self, features, indices):
+            x = spconv.SparseConvTensor(
+                features=features,
+                indices=indices,
+                spatial_shape=[100, 100, 100],
+                batch_size=1
+            )
+            return self.model(x)
+
+    # --- 2. Move Model to GPU ---
+    # We must move the model to CUDA because spconv CPU implementation is incomplete
+    model = model.cuda()
+
+    # --- 3. Create Dummy Inputs on GPU ---
+    # Coords: [BatchID, X, Y, Z] -> [0, 50, 50, 50]
+    dummy_coords = torch.tensor([[0, 50, 50, 50]], dtype=torch.int32, device='cuda')
+    # Features: [1 point, 1 channel]
+    dummy_features = torch.randn(1, 1, dtype=torch.float32, device='cuda')
+
+    try:
+        wrapper = GraphWrapper(model)
+
+        # --- 4. Draw Graph (Force device='cuda') ---
+        model_graph = draw_graph(
+            wrapper,
+            input_data=(dummy_features, dummy_coords),
+            depth=3, # Increased depth slightly to show layer details
+            expand_nested=True,
+            device='cuda'
+        )
+
+        # --- 5. Save ---
+        save_path = os.path.join(save_dir, filename)
+        os.makedirs(save_dir, exist_ok=True)
+        # model_graph.visual_graph.render(save_path, format='png', cleanup=True)
+        model_graph.visual_graph.render(save_path, format='svg', cleanup=True)
+        print(f"Network graph saved to {save_path}.png")
+
+    except Exception as e:
+        print(f"Failed to generate network graph: {e}")
+    finally:
+        # --- 6. CLEANUP: Move model back to CPU ---
+        # Important: Move back so PyTorch Lightning can handle device placement normally
+        model = model.cpu()
+        torch.cuda.empty_cache()
+
+
+def visualize_voxelization(data_dir: str, sample_idx: int = 0, voxel_size: float = 0.05):
+    """
+    Visualize original vs voxelized point cloud for a sample bridge.
+
+    Args:
+        data_dir: Path to data directory
+        sample_idx: Index of sample to visualize
+        voxel_size: Voxel size in meters
+    """
+    if not HAS_MATPLOTLIB:
+        print("Error: matplotlib is required for visualization")
+        return
+
+    dataset = BridgeDataset(data_dir, voxel_size=voxel_size, augment=False)
+
+    if sample_idx >= len(dataset):
+        print(f"Error: sample_idx {sample_idx} is out of range (dataset has {len(dataset)} samples)")
+        return
+
+    # Load original data (this logic loads NPY directly which is already pre-normalized)
+    file_path = dataset.files[sample_idx]
+    original_data = np.load(file_path)
+    original_xyz = original_data[:, 0:3]
+    # # Re-apply the shift to zero so it matches the dataset logic
+    # original_xyz -= original_xyz.min(axis=0)
+    original_labels = original_data[:, 4].astype(int)
+
+    # Get voxelized data from dataset
+    discrete_coords, features, labels = dataset[sample_idx]
+
+    # Convert discrete coords back to continuous space for visualization
+    voxelized_xyz = discrete_coords.astype(float) * voxel_size + voxel_size / 2.0
+
+    # Create figure with two subplots
+    fig = plt.figure(figsize=(16, 8))
+
+    # Add filename as figure title
+    fig.suptitle(file_path.name, fontsize=14, y=0.98)
+
+    # Original point cloud
+    ax1 = fig.add_subplot(121, projection='3d')
+    for label in np.unique(original_labels):
+        mask = original_labels == label
+        color = CLASS_COLORS.get(label, 'gray')
+        ax1.scatter(original_xyz[mask, 0], original_xyz[mask, 1], original_xyz[mask, 2],
+                   c=color, label=CLASS_NAMES.get(label, f'Class {label}'), s=1, alpha=0.6)
+    ax1.set_title(f'Original Point Cloud\n({len(original_xyz)} points)', fontsize=12)
+    ax1.set_xlabel('X (m)')
+    ax1.set_ylabel('Y (m)')
+    ax1.set_zlabel('Z (m)')
+    ax1.legend()
+
+    # Voxelized point cloud
+    ax2 = fig.add_subplot(122, projection='3d')
+    for label in np.unique(labels):
+        mask = labels == label
+        color = CLASS_COLORS.get(label, 'gray')
+        ax2.scatter(voxelized_xyz[mask, 0], voxelized_xyz[mask, 1], voxelized_xyz[mask, 2],
+                   c=color, label=CLASS_NAMES.get(label, f'Class {label}'), s=10, alpha=0.8)
+    ax2.set_title(f'Voxelized Point Cloud\n({len(voxelized_xyz)} voxels, {voxel_size*100:.1f}cm voxel size)', fontsize=12)
+    ax2.set_xlabel('X (m)')
+    ax2.set_ylabel('Y (m)')
+    ax2.set_zlabel('Z (m)')
+    ax2.legend()
+
+    # Set equal aspect ratio for both plots
+    for ax in [ax1, ax2]:
+        # Get current limits
+        xlim = ax.get_xlim()
+        ylim = ax.get_ylim()
+        zlim = ax.get_zlim()
+
+        # Calculate ranges
+        xrange = xlim[1] - xlim[0]
+        yrange = ylim[1] - ylim[0]
+        zrange = zlim[1] - zlim[0]
+
+        # Find max range
+        max_range = max(xrange, yrange, zrange)
+
+        # Center the plot
+        xcenter = (xlim[0] + xlim[1]) / 2
+        ycenter = (ylim[0] + ylim[1]) / 2
+        zcenter = (zlim[0] + zlim[1]) / 2
+
+        # Set new limits
+        ax.set_xlim([xcenter - max_range/2, xcenter + max_range/2])
+        ax.set_ylim([ycenter - max_range/2, ycenter + max_range/2])
+        ax.set_zlim([zcenter - max_range/2, zcenter + max_range/2])
+
+    plt.tight_layout()
+
+    # Print statistics
+    compression_ratio = len(original_xyz) / len(voxelized_xyz) if len(voxelized_xyz) > 0 else 0
+    print(f"\n{'='*60}")
+    print(f"Visualization Statistics for Sample {sample_idx}")
+    print(f"{'='*60}")
+    print(f"File: {file_path.name}")
+    print(f"Original points: {len(original_xyz):,}")
+    print(f"Voxelized points: {len(voxelized_xyz):,}")
+    print(f"Compression ratio: {compression_ratio:.2f}x")
+    print(f"Voxel size: {voxel_size*100:.1f} cm")
+    print(f"\nClass distribution (original):")
+    for label in sorted(np.unique(original_labels)):
+        count = np.sum(original_labels == label)
+        pct = 100 * count / len(original_labels)
+        print(f"  {CLASS_NAMES.get(label, f'Class {label}')}: {count:,} ({pct:.1f}%)")
+    print(f"\nClass distribution (voxelized):")
+    for label in sorted(np.unique(labels)):
+        count = np.sum(labels == label)
+        pct = 100 * count / len(labels) if len(labels) > 0 else 0
+        print(f"  {CLASS_NAMES.get(label, f'Class {label}')}: {count:,} ({pct:.1f}%)")
+    print(f"{'='*60}\n")
+
+    plt.show()
+
+
+def main():
+    """Main entry point with command-line argument parsing."""
+    parser = argparse.ArgumentParser(
+        description='Bridge point cloud data loader with voxelization and visualization'
+    )
+
+    parser.add_argument(
+        '--data-dir',
+        type=str,
+        default='./data/ml-data/silver_training_normalized',
+        help='Path to normalized data directory (default: ./data/ml-data/silver_training_normalized)'
+    )
+
+    parser.add_argument(
+        '--voxel-size',
+        type=float,
+        default=0.05,
+        help='Voxel size in meters (default: 0.05 = 5cm)'
+    )
+
+    parser.add_argument(
+        '--visualize',
+        action='store_true',
+        help='Run visualization on a sample file'
+    )
+
+    parser.add_argument(
+        '--sample-idx',
+        type=int,
+        default=0,
+        help='Index of sample to visualize (default: 0)'
+    )
+
+    parser.add_argument(
+        '--batch-size',
+        type=int,
+        default=4,
+        help='Batch size for testing loader (default: 4)'
+    )
+
+    parser.add_argument(
+        '--augment',
+        action='store_true',
+        help='Enable data augmentation (random rotation and jitter)'
+    )
+
+    # Training arguments
+    parser.add_argument(
+        '--train',
+        action='store_true',
+        help='Enable training mode'
+    )
+
+    parser.add_argument(
+        '--epochs',
+        type=int,
+        default=50,
+        help='Number of training epochs (default: 50)'
+    )
+
+    parser.add_argument(
+        '--learning-rate',
+        type=float,
+        default=0.001,
+        help='Learning rate (default: 0.001)'
+    )
+
+    parser.add_argument(
+        '--weight-decay',
+        type=float,
+        default=0.01,
+        help='Weight decay (default: 0.01)'
+    )
+
+    parser.add_argument(
+        '--base-channels',
+        type=int,
+        default=16,
+        help='Base number of channels in model (default: 16)'
+    )
+
+    parser.add_argument(
+        '--num-workers',
+        type=int,
+        default=4,
+        help='Number of data loader workers (default: 4)'
+    )
+
+    parser.add_argument(
+        '--val-split',
+        type=float,
+        default=0.0,
+        help='Validation split ratio (default: 0.0, no validation)'
+    )
+
+    parser.add_argument(
+        '--exp-name',
+        type=str,
+        default='bridge_classify_base',
+        help='Name of experiment for logging'
+    )
+
+    parser.add_argument(
+        '--gpus',
+        type=int,
+        default=None,
+        help='Number of GPUs to use (0 for CPU, >0 for GPU, None for auto-detect).'
+    )
+
+    args = parser.parse_args()
+
+    if args.train:
+        if not HAS_LIGHTNING:
+            print("Pytorch Lightning not installed")
+            return
+
+        print("=" * 60)
+        print("Starting Training")
+        print("=" * 60)
+        print(f"Data directory: {args.data_dir}")
+        print(f"Voxel size: {args.voxel_size*100:.1f} cm")
+        print(f"Batch size: {args.batch_size}")
+        print(f"Epochs: {args.epochs}")
+        print(f"Learning rate: {args.learning_rate}")
+        print(f"Augmentation: {args.augment}")
+        print(f"Validation split: {args.val_split}")
+        print(f"Experiment name: {args.exp_name}")
+        print("=" * 60)
+
+        # Create data module
+        data_module = BridgeDataModule(
+            data_dir=args.data_dir,
+            voxel_size=args.voxel_size,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            augment=args.augment,
+            val_split=args.val_split
+        )
+
+        # Create model
+        model = BridgeLightningModule(
+            input_channels=1,
+            num_classes=5,
+            base_channels=args.base_channels,
+            learning_rate=args.learning_rate,
+            weight_decay=args.weight_decay,
+        )
+
+        # Logger: TensorBoard
+        tensorboard_logger = TensorBoardLogger(
+            save_dir="./experiments",
+            name=args.exp_name,
+            default_hp_metric=False,
+        )
+
+        csv_logger = CSVLogger(
+            save_dir="./experiments",
+            name=args.exp_name,
+            version=tensorboard_logger.version,
+        )
+
+        # Setup checkpoint callback
+        checkpoint_callback = ModelCheckpoint(
+            # saves inside the logger folder automatically
+            filename='bridge-unet-{epoch:02d}-{val_loss:.4f}',
+            monitor='val_loss',
+            save_top_k=5,
+            mode='min',
+            save_last=True
+        )
+
+        # Create trainer
+        # Determine accelerator and devices based on gpus argument
+        if args.gpus is None:
+            # Auto-detect: will use GPU if available, otherwise CPU
+            accelerator = "auto"
+            devices = "auto"
+        elif args.gpus == 0:
+            # Explicitly use CPU
+            accelerator = "cpu"
+            devices = 1
+        else:
+            # Use GPU with specified number of devices
+            accelerator = "gpu"
+            devices = args.gpus
+
+        trainer = Trainer(
+            max_epochs=args.epochs,
+            accelerator=accelerator,
+            devices=devices,
+            logger=[tensorboard_logger, csv_logger],
+            callbacks=[checkpoint_callback],
+            log_every_n_steps=10,
+        )
+
+        if HAS_TORCHVIEW:
+            save_network_graph(model, tensorboard_logger.log_dir)
+
+        # Train model
+        trainer.fit(model, data_module)
+
+        print("\n" + "=" * 60)
+        print("Training complete!")
+        print("=" * 60)
+        print(f"Checkpoints saved to: ./experiments/{args.exp_name}")
+        return
+
+    # Visualization mode
+    if args.visualize:
+        visualize_voxelization(args.data_dir, args.sample_idx, args.voxel_size)
+        return
+
+    # Test data loader
+    print("=" * 60)
+    print("Testing Bridge Data Loader")
+    print("=" * 60)
+    print(f"Data directory: {args.data_dir}")
+    print(f"Voxel size: {args.voxel_size*100:.1f} cm")
+    print(f"Augmentation: {args.augment}")
+    print("=" * 60)
+
+    # Create dataset
+    try:
+        dataset = BridgeDataset(args.data_dir, voxel_size=args.voxel_size, augment=args.augment)
+    except ValueError as e:
+        print(f"Error: {e}")
+        return
+
+    # Create data loader
+    loader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        collate_fn=sparse_collate_fn,
+        shuffle=True
+    )
+
+    print(f"\nDataset size: {len(dataset)} samples")
+    print(f"Batch size: {args.batch_size}")
+    print("\nTesting data loader...")
+    print("-" * 60)
+
+    # Test a few batches
+    for batch_idx, batch in enumerate(loader):
+        coords = batch['coordinates']
+        feats = batch['features']
+        labels = batch['labels']
+
+        print(f"\nBatch {batch_idx + 1}:")
+        print(f"  Coordinates shape: {coords.shape}  [N_total, 4] = [batch_id, x, y, z]")
+        print(f"  Features shape: {feats.shape}     [N_total, 1] = [intensity]")
+        print(f"  Labels shape: {labels.shape}       [N_total,]")
+        print(f"  Unique labels: {torch.unique(labels).tolist()}")
+        print(f"  Label distribution:")
+        for label in torch.unique(labels):
+            count = torch.sum(labels == label).item()
+            pct = 100 * count / len(labels)
+            print(f"    {CLASS_NAMES.get(label.item(), f'Class {label.item()}')}: {count:,} ({pct:.1f}%)")
+
+        if batch_idx >= 2:  # Show first 3 batches
+            break
+
+    print("\n" + "=" * 60)
+    print("Data loader test complete!")
+    print("=" * 60)
+    print(f"\nTo visualize a sample, run:")
+    print(f"  python model-training.py --visualize --sample-idx 0 --voxel-size {args.voxel_size}")
+
+
+if __name__ == "__main__":
+    main()
