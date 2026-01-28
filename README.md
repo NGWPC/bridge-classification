@@ -18,8 +18,38 @@ The pipeline processes bridge geometries from OpenStreetMap, finds intersecting 
 
 - Python 3.11
 - Conda or Mamba package manager
+- **GPU Requirement:** An NVIDIA GPU is required for `spconv` and full model training.
 
 ### Setup
+
+#### Option 1: Quick Install (Recommended)
+
+This project includes an `environment.yml` file that handles all dependencies, including geospatial libraries and CUDA-accelerated ML tools.
+
+```bash
+# 1. Create the environment from file
+mamba env create -f environment.yml
+
+# 2. Activate the environment
+mamba activate bridge-classify
+
+# 3. Verify GPU availability
+python -c "import torch; print(f'CUDA Available: {torch.cuda.is_available()}')"
+```
+
+**Troubleshooting**: If you encounter `libstdc++` errors (common on Linux) when running scripts:
+
+```bash
+# Try installing the system library
+mamba install -c conda-forge libstdcxx-ng
+
+# OR export the library path before running your script
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
+```
+
+#### Option 2: Manual Installation
+
+If the YAML installation fails or you need to build the environment step-by-step, follow these commands:
 
 ```bash
 # Create mamba/ conda environment
@@ -31,24 +61,27 @@ mamba install -c conda-forge python-pdal gdal entwine matplotlib geopandas tqdm 
 # if needed interactive shell
 mamba install ipython
 
-# Install additional ML dependencies (if needed for training)
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126 # adjust cuda version as needed
-pip install lightning
-pip install tensorboard
+# Install PyTorch & Lightning
+# Note: Using --index-url to find CUDA 12.6 specific wheels
+# adjust cuda version as needed
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+pip install lightning tensorboard
 
-# for saving graph
-# pip install torchview graphviz
-# on linux, you also need an OS-level graphviz package
-# sudo apt-get install graphviz
-
-# pip install spconv # for CPU (only for forward pass and network check)
+# Install Spconv (Sparse Convolution)
+# for CPU (only for forward pass and network check); won't full train
+# pip install spconv
 # needs gpu for full training
-pip install spconv-cu120 # Adjust CUDA version as needed (https://github.com/traveller59/spconv)
-# Note: you need version 1 of numpy for spconv to
-# avoid the Floating point exception (core dumped) error
+# Adjust CUDA version as needed (https://github.com/traveller59/spconv)
+pip install spconv-cu120
+
+# Pin NumPy to avoid the Floating point exception (core dumped) error
 # More info here: https://github.com/traveller59/spconv/issues/725
 mamba install numpy=1.26.4
 
+# Optional: for saving graph
+# pip install torchview graphviz
+# on linux, you also need an OS-level graphviz package
+# sudo apt-get install graphviz
 
 # later when running script if getting an error
 # Error: /lib/x86_64-linux-gnu/libstdc++.so.6: version `CXXABI_1.3.15' not found
@@ -60,15 +93,25 @@ mamba install numpy=1.26.4
 ### Data Download
 - Make a folder named `data/` in the same level as `src/`
 - Make a subfolder `usgs_entwine/` and `osm/hucs/` inside `data/` folder.
-- Download the usgs lidar resources as `wget https://raw.githubusercontent.com/hobuinc/usgs-lidar/refs/heads/master/boundaries/resources.geojson -O data/usgs-entwine/lidar_resources.geojson`
+- Download the usgs lidar resources as `wget https://raw.githubusercontent.com/hobuinc/usgs-lidar/refs/heads/master/boundaries/resources.geojson -O data/usgs_entwine/lidar_resources.geojson`
 - HUCS level osm data can be found at `s3://fimc-data/bridge-classification/osm/hucs/` (organized by huc_id folder level)
 
-### Additional Dependencies
+Download and organize it to match this structure.
 
-For model training (needs GPU machine):
-- PyTorch
-- PyTorch Lightning
-- spconv (sparse convolution library)
+```text
+data/
+├── usgs_entwine/
+│   └── lidar_resources.geojson
+└── osm/
+    └── hucs/
+        ├── 02050206/
+        │   └── osm_bridges_lidar_subset__02050206.gpkg
+        ├── 03070101/
+        │   └── osm_bridges_lidar_subset__03070101.gpkg
+        ├── 11010009/
+        │   └── osm_bridges_lidar_subset__11010009.gpkg
+        └── ... (other huc_id folders)
+```
 
 ## Classification Labels for Training
 
