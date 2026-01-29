@@ -206,7 +206,7 @@ class BridgeDataset(Dataset):
         # Your preprocessing centers data at the mean (e.g., -50 to +50).
         # SpConv indices MUST be positive (0 to 100)?
         # We shift the min value to 0.0 for every sample.
-        # xyz -= xyz.min(axis=0)
+        xyz -= xyz.min(axis=0)
 
 
         # 2. Data Augmentation (Optional)
@@ -225,7 +225,7 @@ class BridgeDataset(Dataset):
             xyz += jitter
 
             # Re-shift to positive after rotation (rotation can make things negative again)
-            # xyz -= xyz.min(axis=0)
+            xyz -= xyz.min(axis=0)
 
         # 3. Quantization (Voxelization)
         # Divide by voxel size and floor to get integer grid coordinates
@@ -595,7 +595,7 @@ def visualize_voxelization(data_dir: str, sample_idx: int = 0, voxel_size: float
     original_data = np.load(file_path)
     original_xyz = original_data[:, 0:3]
     # # Re-apply the shift to zero so it matches the dataset logic
-    # original_xyz -= original_xyz.min(axis=0)
+    original_xyz -= original_xyz.min(axis=0)
     original_labels = original_data[:, 4].astype(int)
 
     # Get voxelized data from dataset
