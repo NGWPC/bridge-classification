@@ -153,7 +153,10 @@ def run_weak_supervision_pipeline():
 
             arrays = pipeline.arrays[0]
 
-            # --- SAVE ORIGINAL (Raw download + SMRF) ---
+            # --- SAVE ORIGINAL (Raw download) ---
+            # Saving BEFORE sorting/shuffling to preserve original order if desired,
+            # though usually saving the sorted/shuffled version is fine too.
+            # Here we save the raw pipeline output.
             writer_orig_json = {
                 "pipeline": [{
                     "type": "writers.las",
@@ -165,11 +168,40 @@ def run_weak_supervision_pipeline():
             pdal.Pipeline(json.dumps(writer_orig_json), arrays=[arrays]).execute()
             print(f" -> Saved Original: {original_filename}")
 
+            # --- ENFORCE DETERMINISTIC ORDERING ---
+            # Sort arrays by X, then Y, then Z to ensure RANSAC sees the
+            # exact same indices regardless of OS or download chunking.
+            # Using structured array sorting or lexsort.
+
+            # Create a sorting index based on X, Y, Z
+            # np.lexsort sorts by the last key passed first, so we pass (Z, Y, X) to sort by X, then Y, then Z
+            sort_idx = np.lexsort((arrays['Z'], arrays['Y'], arrays['X']))
+
+            # Reorder the structured array
+            arrays = arrays[sort_idx]
+
+            # NOW, shuffle deterministically using a fixed seed
+            # This breaks the spatial clusters created by step 1
+            rng = np.random.default_rng(seed=27)
+            shuffle_idx = rng.permutation(len(arrays))
+            arrays = arrays[shuffle_idx]
+
+
             # Extract Data for Processing
             X = arrays['X']
             Y = arrays['Y']
             Z = arrays['Z']
             Classes = arrays['Classification']
+
+            # --- CENTER COORDINATES FOR NUMERICAL STABILITY ---
+            # RANSAC fails on Ubuntu because X/Y are huge (e.g. 10,000,000).
+            # We shift them to 0,0 temporarily for the math to work safely.
+            x_center = np.mean(X)
+            y_center = np.mean(Y)
+
+            X_local = X - x_center
+            Y_local = Y - y_center
+
 
             # --- 4 RANSAC LOGIC ---
 
@@ -184,8 +216,9 @@ def run_weak_supervision_pipeline():
                 print(f"Not enough points to fit a bridge for {osmid}.")
                 continue
 
-            X_fit = X[fit_mask]
-            Y_fit = Y[fit_mask]
+            # Use local coordinates for fitting
+            X_fit = X_local[fit_mask]
+            Y_fit = Y_local[fit_mask]
             Z_fit = Z[fit_mask]
             xy_fit = np.stack([X_fit, Y_fit], axis=1)
 
@@ -200,6 +233,7 @@ def run_weak_supervision_pipeline():
                 continue
 
             # --- 5 MASKING (CONVEX HULL) ---
+            # Use local coordinates because RANSAC and inliers were calculated in local space
             x_inliers = X_fit[inlier_mask]
             y_inliers = Y_fit[inlier_mask]
             xy_inliers = np.stack([x_inliers, y_inliers], axis=1)
@@ -213,18 +247,20 @@ def run_weak_supervision_pipeline():
                 continue
 
             # Create a Global Lateral Mask for ALL points based on the Hull
-            all_xy = np.stack([X, Y], axis=1)
-            lateral_mask = hull_path.contains_points(all_xy)
+            # FIX: Must use Local Coordinates for the check, because Hull is in Local Coordinates!
+            xy_local_all = np.stack([X_local, Y_local], axis=1)
+            lateral_mask = hull_path.contains_points(xy_local_all)
 
             # Identify points inside the hull that are NOT deep noise
             # (used for curvature check)
-            predicted_z_all = ransac.predict(all_xy)
+            predicted_z_all = ransac.predict(xy_local_all)
             dist_from_plane_all = Z - predicted_z_all
 
             # Points roughly near the bridge plane (for curvature check)
             structure_check_mask = lateral_mask & (dist_from_plane_all > -2.0) & (dist_from_plane_all < 2.0)
 
-            xy_check = all_xy[structure_check_mask]
+            # Use local coordinates for curvature check too (numerically safer)
+            xy_check = xy_local_all[structure_check_mask]
             z_check = Z[structure_check_mask]
 
             # --- 6 CURVATURE CHECKS ---

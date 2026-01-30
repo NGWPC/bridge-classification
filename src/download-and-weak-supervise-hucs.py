@@ -105,6 +105,9 @@ class BridgeProcessingConfig:
     # Writer parameters
     pdal_writer_srs: str = "EPSG:3857"
 
+    # Deterministic Ordering Configuration
+    deterministic_ordering_seed: int = 27
+
     # RANSAC Configuration
     ransac_min_samples: int = 10
     ransac_residual_threshold: float = 0.20
@@ -390,11 +393,38 @@ class WeakSupervisionPipeline:
 
             arrays = smrf_pipeline.arrays[0]
 
+            # --- ENFORCE DETERMINISTIC ORDERING ---
+            # Sort arrays by X, then Y, then Z to ensure RANSAC sees the
+            # exact same indices regardless of OS or download chunking.
+            # Using structured array sorting or lexsort.
+
+            # Create a sorting index based on X, Y, Z
+            # np.lexsort sorts by the last key passed first, so we pass (Z, Y, X) to sort by X, then Y, then Z
+            sort_idx = np.lexsort((arrays['Z'], arrays['Y'], arrays['X']))
+
+            # Reorder the structured array
+            arrays = arrays[sort_idx]
+
+            # NOW, shuffle deterministically using a fixed seed
+            # his breaks the spatial clusters created by step 1
+            rng = np.random.default_rng(seed=config.deterministic_ordering_seed)
+            shuffle_idx = rng.permutation(len(arrays))
+            arrays = arrays[shuffle_idx]
+
             # Extract Data for Processing
             X = arrays['X']
             Y = arrays['Y']
             Z = arrays['Z']
             Classes = arrays['Classification']
+
+            # --- CENTER COORDINATES FOR NUMERICAL STABILITY ---
+            # RANSAC fails on Ubuntu because X/Y are huge (e.g. 10,000,000).
+            # We shift them to 0,0 temporarily for the math to work safely.
+            x_center = np.mean(X)
+            y_center = np.mean(Y)
+
+            X_local = X - x_center
+            Y_local = Y - y_center
 
             # --- RANSAC LOGIC ---
             fit_mask = ~np.isin(Classes, config.ignore_classes)
@@ -405,8 +435,9 @@ class WeakSupervisionPipeline:
                     'error': f'Not enough points for RANSAC fitting ({np.sum(fit_mask)} < {config.min_points_for_ransac})'
                 }
 
-            X_fit = X[fit_mask]
-            Y_fit = Y[fit_mask]
+            # Use local coordinates for fitting
+            X_fit = X_local[fit_mask]
+            Y_fit = Y_local[fit_mask]
             Z_fit = Z[fit_mask]
             xy_fit = np.stack([X_fit, Y_fit], axis=1)
 
@@ -441,17 +472,19 @@ class WeakSupervisionPipeline:
                 }
 
             # Create a Global Lateral Mask for ALL points based on the Hull
-            all_xy = np.stack([X, Y], axis=1)
-            lateral_mask = hull_path.contains_points(all_xy)
+            # Use local coordinates for the check, because Hull is in local coordinates
+            xy_local_all = np.stack([X_local, Y_local], axis=1)
+            lateral_mask = hull_path.contains_points(xy_local_all)
 
             # Identify points inside the hull that are NOT deep noise
-            predicted_z_all = ransac.predict(all_xy)
+            predicted_z_all = ransac.predict(xy_local_all)
             dist_from_plane_all = Z - predicted_z_all
 
             # Points roughly near the bridge plane (for curvature check)
             structure_check_mask = lateral_mask & (dist_from_plane_all > config.structure_check_min_z) & (dist_from_plane_all < config.structure_check_max_z)
 
-            xy_check = all_xy[structure_check_mask]
+            # Use local coordinates for curvature check too (numerically safer)
+            xy_check = xy_local_all[structure_check_mask]
             z_check = Z[structure_check_mask]
 
             # --- CURVATURE CHECKS ---
@@ -495,8 +528,8 @@ class WeakSupervisionPipeline:
             arrays['Classification'] = new_classes
 
             return {
-                'original_arrays': original_arrays,  # Original after SMRF, before classification
-                'arrays': arrays,  # Modified after weak supervision classification
+                'original_arrays': original_arrays,  # Original
+                'arrays': arrays,  # Modified after smrf and weak supervision classification
                 'success': True,
                 'rmse': rmse_inliers,
                 'deviation': deviation
