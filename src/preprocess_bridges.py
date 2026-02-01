@@ -30,22 +30,6 @@ except ImportError:
 
 # --- LOGICAL CLASS MAPPING ---
 # Maps standard ASPRS/LAS codes to Model Training Labels (0-4)
-# 0: Background/Unclassified
-# 1: Ground (from SMRF)
-# 2: Water (if present)
-# 3: Bridge Deck (Target)
-# 4: Obstacles (Cars, Poles, High Noise)
-
-# LAS_TO_MODEL_MAP = {
-#     2: 1,   # Ground -> 1
-#     9: 2,   # Water -> 2
-#     17: 3,  # Bridge Deck -> 3
-#     18: 4,  # High Noise -> 4
-#     # All other inputs (1, 7, etc.) map to 0 (Background)
-# }
-
-# --- LOGICAL CLASS MAPPING ---
-# Maps standard ASPRS/LAS codes to Model Training Labels (0-4)
 # 0: Background/Unclassified (included merged piers/pylons)
 # 1: Ground/ Water (Non-Bridge Surface)
 # 2: Bridge Deck (Primary Target)
@@ -147,7 +131,6 @@ def process_laz_file(filepath: Path, output_dir: Path, skip_existing: bool = Fal
         data_block = np.stack([X_norm, Y_norm, Z_norm, I_norm, labels], axis=1).astype(np.float32)
 
         # 5. SAVE ARTIFACTS
-        output_dir.mkdir(parents=True, exist_ok=True)
         npy_path = output_dir / f"{file_id}.npy"
         json_path = output_dir / f"{file_id}.json"
 
@@ -164,18 +147,20 @@ def process_laz_file(filepath: Path, output_dir: Path, skip_existing: bool = Fal
             },
             "stats": {
                 "point_count": int(len(X)),
-                "bridge_points": int(np.sum(labels == 3)),
-                "ground_points": int(np.sum(labels == 1)),
-                "water_points": int(np.sum(labels == 2)),
-                "noise_points": int(np.sum(labels == 4)),
-                "background_points": int(np.sum(labels == 0))
+                # Class 2 is Bridge Deck
+                "bridge_points": int(np.sum(labels == 2)),
+                # Class 1 is Ground + Water
+                "ground_water_points": int(np.sum(labels == 1)),
+                # Class 3 is Obstacles (Noise)
+                "obstacle_points": int(np.sum(labels == 3)),
+                # Class 0 is Background
+                "background_points": int(np.sum(labels == 0)),
             },
             "class_distribution": {
                 "0": int(np.sum(labels == 0)),
                 "1": int(np.sum(labels == 1)),
                 "2": int(np.sum(labels == 2)),
-                "3": int(np.sum(labels == 3)),
-                "4": int(np.sum(labels == 4))
+                "3": int(np.sum(labels == 3))
             }
         }
 
@@ -255,6 +240,7 @@ def process_huc_folder(huc_dir: Path, output_base_dir: Path, skip_existing: bool
         "errors": []
     }
 
+    output_huc_dir.mkdir(parents=True, exist_ok=True) # create output dir once safely
     # Prepare tasks for multiprocessing
     tasks = [(laz_file, output_huc_dir, skip_existing) for laz_file in laz_files]
 
