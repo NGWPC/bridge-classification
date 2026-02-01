@@ -163,10 +163,10 @@ data/
 
 The pipeline uses the following classification scheme:
 
-- **0**: Background/Unclassified (included merged piers/pylons)
-- **1**: Ground/ Water (Non-Bridge Surface)
+- **0**: Background/Unclassified (Piers/Pylons, Trees, Low Noise, Birds)
+- **1**: Ground/ Water (Non-Bridge Surface, River Banks, Water Surface)
 - **2**: Bridge Deck (Primary Target)
-- **3**: Obstacles (Cars, Poles, High Noise)
+- **3**: Obstacles (Cars, Light Poles, High Noise)
 
 ## Output Structure
 
@@ -186,27 +186,25 @@ The normalization script generates JSON metadata files with the following struct
 
 ```json
 {
-    "original_file": "bridge_123456_source.laz",
-    "original_path": "/path/to/original/file.laz",
+    "original_file": "bridge_5069009_USGS_LPC_PA_South_Central_B2_2017_LAS_2019.laz",
+    "original_path": "data/ml-data/silver_training/02050206/bridge_5069009_USGS_LPC_PA_South_Central_B2_2017_LAS_2019.laz",
     "offsets": {
-        "x_center": 1234567.89,
-        "y_center": 9876543.21,
-        "z_min": 45.67
+        "x_center": -8548539.406538319,
+        "y_center": 4995360.8107266445,
+        "z_min": 128.93
     },
     "stats": {
-        "point_count": 100000,
-        "bridge_points": 5000,
-        "ground_points": 80000,
-        "water_points": 0,
-        "noise_points": 2000,
-        "background_points": 13000
+        "point_count": 27166,
+        "bridge_points": 13030,
+        "ground_water_points": 5910,
+        "obstacle_points": 6112,
+        "background_points": 2114
     },
     "class_distribution": {
-        "0": 13000,
-        "1": 80000,
-        "2": 0,
-        "3": 5000,
-        "4": 2000
+        "0": 2114,
+        "1": 5910,
+        "2": 13030,
+        "3": 6112
     }
 }
 ```
