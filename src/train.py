@@ -7,18 +7,24 @@ This module provides a data loader for bridge point cloud classification with:
 - Visualization tools to verify voxelization correctness
 - PyTorch Lightning training integration
 
+Data: use --train-dir for training data and optionally --val-dir for validation.
+If --val-dir is not provided, the script uses --val-split to randomly split
+the training directory into train/validation (val-split=0 means no validation).
+Testing (gold/human-labeled) data is not used during training; use it later
+for final evaluation after model selection.
+
 Usage:
-    # Test data loader
-    python src/train.py --data-dir ./data/ml-data/silver_training_normalized
+    # Test data loader (default: --train-dir ./data/ml-data/training)
+    python src/train.py --train-dir ./data/ml-data/training
 
     # Visualize voxelization
     python src/train.py --visualize --sample-idx 0
 
-    # Custom voxel size
-    python src/train.py --voxel-size 0.1 --visualize
+    # Train with explicit validation directory
+    python src/train.py --train --train-dir ./data/ml-data/training --val-dir ./data/ml-data/validation --epochs 50
 
-    # Train model
-    python src/train.py --train --data-dir ./data/ml-data/silver_training_normalized --epochs 50
+    # Train with val-split when val-dir not provided
+    python src/train.py --train --train-dir ./data/ml-data/training --val-split 0.2 --epochs 50
 """
 
 import os
@@ -72,18 +78,16 @@ from model import SparseUNet
 # Class label mapping for visualization
 CLASS_COLORS = {
     0: 'black',    # Background/Unclassified
-    1: 'green',    # Ground
-    2: 'blue',     # Water
-    3: 'red',      # Bridge Deck
-    4: 'yellow'    # Obstacles/High Noise
+    1: 'orange',    # Ground/Water
+    2: 'blue',      # Bridge Deck
+    3: 'yellow'    # Obstacles/High Noise
 }
 
 CLASS_NAMES = {
     0: 'Background',
-    1: 'Ground',
-    2: 'Water',
-    3: 'Bridge Deck',
-    4: 'Obstacles'
+    1: 'Ground/Water',
+    2: 'Bridge Deck',
+    3: 'Obstacles',
 }
 
 
@@ -295,7 +299,7 @@ if HAS_LIGHTNING:
         def __init__(
             self,
             input_channels=1,
-            num_classes=5,
+            num_classes=4,
             base_channels=16,
             learning_rate=0.001,
             weight_decay=0.01,
@@ -322,9 +326,13 @@ if HAS_LIGHTNING:
             self.learning_rate = learning_rate
             self.weight_decay = weight_decay
 
-            # Default class weights: [Background, Ground, Water, Deck, Obstacle]
+            # Default class weights: [Background, Ground/ Water, Bridge Deck, Obstacle]
+            # calculated weights from utils/calculate_weights.py
             if class_weights is None:
-                class_weights = [0.1, 0.5, 0.5, 2.0, 1.5]
+                # mac
+                # class_weights = [5.554448601617274, 1.3683353169973125, 0.3819817544841005, 2.122137404580153]
+                # ubuntu server
+                class_weights = [5.541478352538639, 1.3688236995495695, 0.38211636815295946, 2.1187130327090355]
 
             self.register_buffer('class_weights', torch.tensor(class_weights, dtype=torch.float32))
             self.criterion = nn.CrossEntropyLoss(weight=self.class_weights)
@@ -350,7 +358,7 @@ if HAS_LIGHTNING:
             # coords[:, 1:] gets X, Y, Z columns
             max_coords = coords[:, 1:].max(dim=0)[0]
             # limit = max_coords + 5
-            # # Align to 32
+            # # Align to 32 if needed
             # spatial_shape = ((limit + 31) // 32 * 32).int().tolist()
 
             # Add small padding to be safe
@@ -371,21 +379,48 @@ if HAS_LIGHTNING:
 
             # Calculate Metrics
             preds = torch.argmax(output, dim=1)
-            deck_mask = (labels == 3)
 
-            # Deck Accuracy (Recall)
-            deck_acc = 0.0
-            if deck_mask.sum() > 0:
-                correct_deck = (preds[deck_mask] == labels[deck_mask]).sum().float()
-                deck_acc = (correct_deck / deck_mask.sum().float()) * 100.0
+            # --- METRICS FOR BRIDGE DECK (CLASS 2) ---
+            deck_target = (labels == 2)
+            deck_pred = (preds == 2)
 
-            # Overall Accuracy
+            # 1. Deck Recall (Accuracy on deck points)
+            # "Of the real deck points, how many did we find?"
+            deck_recall = 0.0
+            if deck_target.sum() > 0:
+                correct_deck = (preds[deck_target] == labels[deck_target]).sum().float()
+                deck_recall = (correct_deck / deck_target.sum().float()) * 100.0
+
+            # 2. Deck Precision
+            # "Of the points we called 'deck', how many were actually deck?"
+            deck_precision = 0.0
+            if deck_pred.sum() > 0:
+                true_positives = (deck_pred & deck_target).sum().float()
+                deck_precision = (true_positives / deck_pred.sum().float()) * 100.0
+
+            # 3. Deck IoU (Intersection over Union)
+            # The gold standard for segmentation. Penalizes both false positives and false negatives.
+            deck_iou = 0.0
+            intersection = (deck_pred & deck_target).sum().float()
+            union = (deck_pred | deck_target).sum().float()
+
+            if union > 0:
+                deck_iou = (intersection / union) * 100.0
+
+            # 4. Overall Accuracy
             overall_acc = (preds == labels).float().mean() * 100.0
 
             # Logging
+            # Loss (progress bar)
             self.log(f'{prefix}_loss', loss, on_step=(prefix=='train'), on_epoch=True, prog_bar=True)
-            self.log(f'{prefix}_deck_acc', deck_acc, on_step=(prefix=='train'), on_epoch=True, prog_bar=True)
-            self.log(f'{prefix}_overall_acc', overall_acc, on_step=(prefix=='train'), on_epoch=True)
+
+            # Deck IoU (progress bar - this is your most important metric)
+            self.log(f'{prefix}_deck_iou', deck_iou, on_step=(prefix=='train'), on_epoch=True, prog_bar=True)
+
+            # Detailed Metrics (logged but hidden from progress bar to keep it clean)
+            self.log(f'{prefix}_deck_recall', deck_recall, on_step=(prefix=='train'), on_epoch=True, prog_bar=False)
+            self.log(f'{prefix}_deck_precision', deck_precision, on_step=(prefix=='train'), on_epoch=True, prog_bar=False)
+            self.log(f'{prefix}_overall_acc', overall_acc, on_step=(prefix=='train'), on_epoch=True, prog_bar=False)
 
             return loss
 
@@ -404,34 +439,47 @@ if HAS_LIGHTNING:
                 lr=self.learning_rate,
                 weight_decay=self.weight_decay
             )
-            return optimizer
+            # Add ReduceLROnPlateau
+            scheduler = {
+                'scheduler': optim.lr_scheduler.ReduceLROnPlateau(
+                    optimizer, mode='min', factor=0.5, patience=5, min_lr=1e-6
+                ),
+                'monitor': 'val_loss', # Required for ReduceLROnPlateau
+                'interval': 'epoch',
+                'frequency': 1
+            }
+            return [optimizer], [scheduler]
 
 
     class BridgeDataModule(LightningDataModule):
         """
         PyTorch Lightning data module for bridge dataset.
+        Uses train_dir and optionally val_dir, or val_split on train_dir when val_dir not set.
         """
 
         def __init__(
             self,
-            data_dir: str,
+            train_dir: str,
+            val_dir: Optional[str] = None,
             voxel_size: float = 0.05,
             batch_size: int = 4,
             num_workers: int = 4,
             augment: bool = True,
-            val_split: float = 0.0
+            val_split: float = 0.0,
         ):
             """
             Args:
-                data_dir: Path to data directory
+                train_dir: Path to directory containing training .npy files
+                val_dir: Path to directory containing validation .npy files; if None, use val_split on train_dir
                 voxel_size: Voxel size in meters (default: 0.05)
                 batch_size: Batch size (default: 4)
                 num_workers: Number of data loader workers (default: 4)
                 augment: Whether to apply augmentation (default: True)
-                val_split: Validation split ratio (default: 0.0, no validation)
+                val_split: Validation split ratio when val_dir is not set (default: 0.0, no validation)
             """
             super().__init__()
-            self.data_dir = data_dir
+            self.train_dir = train_dir
+            self.val_dir = val_dir
             self.voxel_size = voxel_size
             self.batch_size = batch_size
             self.num_workers = num_workers
@@ -439,45 +487,63 @@ if HAS_LIGHTNING:
             self.val_split = val_split
 
         def setup(self, stage=None):
-            """Setup datasets."""
+            """Setup datasets from train_dir and val_dir, or val_split on train_dir."""
             if stage == 'fit' or stage is None:
-                # Create full dataset to get file list
-                full_dataset = BridgeDataset(
-                    self.data_dir,
-                    voxel_size=self.voxel_size,
-                    augment=False
-                )
+                try:
+                    full_dataset = BridgeDataset(
+                        self.train_dir,
+                        voxel_size=self.voxel_size,
+                        augment=False
+                    )
+                except ValueError as e:
+                    raise ValueError(
+                        f"Training directory {self.train_dir!r} has no .npy files or does not exist. {e}"
+                    ) from e
 
-                if self.val_split > 0:
-                    # Split dataset indices
+                # Explicit val_dir: use it if directory exists and has .npy files
+                if self.val_dir and os.path.isdir(self.val_dir):
+                    npy_files = list(Path(self.val_dir).rglob("*.npy"))
+                    if npy_files:
+                        self.train_dataset = BridgeDataset(
+                            self.train_dir,
+                            voxel_size=self.voxel_size,
+                            augment=self.augment
+                        )
+                        self.val_dataset = BridgeDataset(
+                            self.val_dir,
+                            voxel_size=self.voxel_size,
+                            augment=False
+                        )
+                    else:
+                        self.train_dataset = BridgeDataset(
+                            self.train_dir,
+                            voxel_size=self.voxel_size,
+                            augment=self.augment
+                        )
+                        self.val_dataset = None
+                elif self.val_split > 0:
+                    # Split training directory into train/val by index
                     dataset_size = len(full_dataset)
                     val_size = int(dataset_size * self.val_split)
                     train_size = dataset_size - val_size
-
                     indices = torch.randperm(dataset_size).tolist()
                     train_indices = indices[:train_size]
                     val_indices = indices[train_size:]
-
-                    # Create separate datasets with appropriate augmentation
                     self.train_dataset = BridgeDataset(
-                        self.data_dir,
+                        self.train_dir,
                         voxel_size=self.voxel_size,
                         augment=self.augment
                     )
-                    # Override file list with train indices
                     self.train_dataset.files = [full_dataset.files[i] for i in train_indices]
-
                     self.val_dataset = BridgeDataset(
-                        self.data_dir,
+                        self.train_dir,
                         voxel_size=self.voxel_size,
-                        augment=False  # No augmentation for validation
+                        augment=False
                     )
-                    # Override file list with val indices
                     self.val_dataset.files = [full_dataset.files[i] for i in val_indices]
                 else:
-                    # No validation split - use full dataset with augmentation
                     self.train_dataset = BridgeDataset(
-                        self.data_dir,
+                        self.train_dir,
                         voxel_size=self.voxel_size,
                         augment=self.augment
                     )
@@ -690,6 +756,9 @@ def visualize_voxelization(data_dir: str, sample_idx: int = 0, voxel_size: float
 
 def main():
     """Main entry point with command-line argument parsing."""
+    if HAS_LIGHTNING:
+        pl.seed_everything(27, workers=True)
+
     parser = argparse.ArgumentParser(
         description='Bridge point cloud data loader with voxelization and visualization'
     )
@@ -697,8 +766,29 @@ def main():
     parser.add_argument(
         '--data-dir',
         type=str,
-        default='./data/ml-data/silver_training_normalized',
-        help='Path to normalized data directory (default: ./data/ml-data/silver_training_normalized)'
+        default='./data/ml-data',
+        help='Data directory for test loader and visualize when not using --train-dir (default: ./data/ml-data)'
+    )
+
+    parser.add_argument(
+        '--train-dir',
+        type=str,
+        default='./data/ml-data/training',
+        help='Path to directory containing training .npy files (default: ./data/ml-data/training)'
+    )
+
+    parser.add_argument(
+        '--val-dir',
+        type=str,
+        default=None,
+        help='Path to directory containing validation .npy files; if not set, validation uses --val-split on training data'
+    )
+
+    parser.add_argument(
+        '--val-split',
+        type=float,
+        default=0.0,
+        help='Validation split ratio when --val-dir is not provided (0 = no validation, e.g. 0.2 for 20%% val)'
     )
 
     parser.add_argument(
@@ -777,13 +867,6 @@ def main():
     )
 
     parser.add_argument(
-        '--val-split',
-        type=float,
-        default=0.0,
-        help='Validation split ratio (default: 0.0, no validation)'
-    )
-
-    parser.add_argument(
         '--exp-name',
         type=str,
         default='bridge_classify_base',
@@ -798,39 +881,58 @@ def main():
     )
 
     args = parser.parse_args()
+    print(f"Using args: {args}")
 
     if args.train:
         if not HAS_LIGHTNING:
             print("Pytorch Lightning not installed")
             return
 
+        train_dir = args.train_dir
+        val_dir = args.val_dir
+
+        if val_dir is None or (not os.path.isdir(val_dir)):
+            if args.val_split > 0:
+                print("Note: --val-dir not provided; validation will use --val-split on training data.")
+            else:
+                print("Note: No validation (--val-dir not provided and --val-split is 0).")
+        else:
+            npy_in_val = list(Path(val_dir).rglob("*.npy"))
+            if not npy_in_val:
+                if args.val_split > 0:
+                    print("Note: --val-dir has no .npy files; validation will use --val-split on training data.")
+                else:
+                    print("Note: No validation (--val-dir has no .npy files and --val-split is 0).")
+
         print("=" * 60)
         print("Starting Training")
         print("=" * 60)
-        print(f"Data directory: {args.data_dir}")
+        print(f"Train dir: {train_dir}")
+        print(f"Val dir: {val_dir}")
+        print(f"Val split (when val-dir not used): {args.val_split}")
         print(f"Voxel size: {args.voxel_size*100:.1f} cm")
         print(f"Batch size: {args.batch_size}")
         print(f"Epochs: {args.epochs}")
         print(f"Learning rate: {args.learning_rate}")
         print(f"Augmentation: {args.augment}")
-        print(f"Validation split: {args.val_split}")
         print(f"Experiment name: {args.exp_name}")
         print("=" * 60)
 
         # Create data module
         data_module = BridgeDataModule(
-            data_dir=args.data_dir,
+            train_dir=train_dir,
+            val_dir=val_dir,
             voxel_size=args.voxel_size,
             batch_size=args.batch_size,
             num_workers=args.num_workers,
             augment=args.augment,
-            val_split=args.val_split
+            val_split=args.val_split,
         )
 
         # Create model
         model = BridgeLightningModule(
             input_channels=1,
-            num_classes=5,
+            num_classes=4,
             base_channels=args.base_channels,
             learning_rate=args.learning_rate,
             weight_decay=args.weight_decay,
@@ -849,15 +951,27 @@ def main():
             version=tensorboard_logger.version,
         )
 
-        # Setup checkpoint callback
-        checkpoint_callback = ModelCheckpoint(
-            # saves inside the logger folder automatically
-            filename='bridge-unet-{epoch:02d}-{val_loss:.4f}',
-            monitor='val_loss',
-            save_top_k=5,
-            mode='min',
-            save_last=True
+        # Setup checkpoint callback (use train_loss when no validation data)
+        has_validation = (
+            (val_dir and os.path.isdir(val_dir) and len(list(Path(val_dir).rglob("*.npy"))) > 0)
+            or args.val_split > 0
         )
+        if has_validation:
+            checkpoint_callback = ModelCheckpoint(
+                filename='bridge-unet-{epoch:02d}-{val_loss:.4f}',
+                monitor='val_loss',
+                save_top_k=5,
+                mode='min',
+                save_last=True
+            )
+        else:
+            checkpoint_callback = ModelCheckpoint(
+                filename='bridge-unet-{epoch:02d}-{train_loss:.4f}',
+                monitor='train_loss',
+                save_top_k=5,
+                mode='min',
+                save_last=True
+            )
 
         # Create trainer
         # Determine accelerator and devices based on gpus argument
@@ -895,23 +1009,26 @@ def main():
         print(f"Checkpoints saved to: ./experiments/{args.exp_name}")
         return
 
+    # Directory for test loader and visualize: use --train-dir (default training data)
+    effective_dir = args.train_dir
+
     # Visualization mode
     if args.visualize:
-        visualize_voxelization(args.data_dir, args.sample_idx, args.voxel_size)
+        visualize_voxelization(effective_dir, args.sample_idx, args.voxel_size)
         return
 
     # Test data loader
     print("=" * 60)
     print("Testing Bridge Data Loader")
     print("=" * 60)
-    print(f"Data directory: {args.data_dir}")
+    print(f"Data directory: {effective_dir}")
     print(f"Voxel size: {args.voxel_size*100:.1f} cm")
     print(f"Augmentation: {args.augment}")
     print("=" * 60)
 
     # Create dataset
     try:
-        dataset = BridgeDataset(args.data_dir, voxel_size=args.voxel_size, augment=args.augment)
+        dataset = BridgeDataset(effective_dir, voxel_size=args.voxel_size, augment=args.augment)
     except ValueError as e:
         print(f"Error: {e}")
         return
@@ -953,7 +1070,7 @@ def main():
     print("Data loader test complete!")
     print("=" * 60)
     print(f"\nTo visualize a sample, run:")
-    print(f"  python model-training.py --visualize --sample-idx 0 --voxel-size {args.voxel_size}")
+    print(f"  python src/train.py --visualize --sample-idx 0 --voxel-size {args.voxel_size}")
 
 
 if __name__ == "__main__":
