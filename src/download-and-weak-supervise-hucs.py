@@ -62,6 +62,7 @@ import numpy as np
 import argparse
 import multiprocessing
 import logging
+import traceback
 from datetime import datetime
 from typing import List, Dict, Tuple, Optional, Any
 from dataclasses import dataclass, asdict
@@ -588,7 +589,8 @@ class DataManager:
     def file_exists(self, huc_id: str, osmid: str, source_name: str) -> bool:
         """Check if both source and silver files already exist."""
         source_path, silver_path = self.get_paths(huc_id, osmid, source_name)
-        return Path(source_path).exists() and Path(silver_path).exists()
+        # since we are saving source file both for success and failure, we only need to check the source file
+        return Path(source_path).exists()
 
     def save_files(self, original_arrays: Any, modified_arrays: Any, huc_id: str, osmid: str, source_name: str, config: BridgeProcessingConfig) -> bool:
         """
@@ -762,6 +764,62 @@ def process_bridge_source(args: TaskTuple) -> Dict[str, Any]:
         }
 
 
+def _generate_tasks_for_one_huc(args: Tuple[Any, ...]) -> Tuple[List[TaskTuple], Optional[str]]:
+    """
+    Generate task tuples for a single HUC. Module-level for multiprocessing pickling.
+
+    Args:
+        args: Tuple of (huc_id, gpkg_path, osm_ids, lidar_resources_path,
+                       buffer_meters, source_dir, silver_dir, config_dict)
+
+    Returns:
+        Tuple of (list of task tuples for process_bridge_source, error message or None)
+    """
+    (huc_id, gpkg_path, osm_ids, lidar_resources_path, buffer_meters,
+     source_dir, silver_dir, config_dict) = args
+
+    try:
+        config = BridgeProcessingConfig.from_dict(config_dict)
+        gdf = gpd.read_file(str(gpkg_path))
+        gdf = gdf.to_crs(epsg=config.epsg_code)
+
+        if 'osmid' not in gdf.columns:
+            return ([], None)
+
+        gdf['osmid'] = gdf['osmid'].astype(str)
+        if osm_ids is not None:
+            osm_ids_str = [str(x) for x in osm_ids]
+            gdf = gdf[gdf['osmid'].isin(osm_ids_str)]
+
+        if gdf.empty:
+            return ([], None)
+
+        finder = LidarSourceFinder(lidar_resources_path)
+        tasks = []
+
+        for idx, row in gdf.iterrows():
+            osmid = row['osmid']
+            geom = row.geometry
+            sources = finder.find_intersecting_sources(geom, buffer_meters)
+            if not sources:
+                continue
+            geom_wkt = geom.wkt
+            for source in sources:
+                task = (
+                    huc_id, osmid, geom_wkt, source['url'], source['name'],
+                    buffer_meters, source_dir, silver_dir, config_dict
+                )
+                tasks.append(task)
+
+        return (tasks, None)
+    except OSError as e:
+        return ([], f"[{huc_id}] Task generation failed ({gpkg_path}): I/O error: {e}")
+    except (ValueError, KeyError) as e:
+        return ([], f"[{huc_id}] Task generation failed ({gpkg_path}): config/data error: {type(e).__name__}: {e}")
+    except Exception as e:
+        return ([], f"[{huc_id}] Task generation failed ({gpkg_path}): {type(e).__name__}: {e}\n{traceback.format_exc()}")
+
+
 class BridgeProcessor:
     """Main orchestrator class for processing bridges across HUCs."""
 
@@ -825,67 +883,40 @@ class BridgeProcessor:
     def generate_tasks(self, huc_ids: Optional[List[str]] = None,
                       osm_ids: Optional[List[str]] = None) -> List[TaskTuple]:
         """
-        Generate all (bridge, source) tasks for processing.
+        Generate all (bridge, source) tasks for processing in parallel per HUC.
 
         Returns:
             List of task tuples for process_bridge_source function
         """
-        tasks = []
         huc_files = self.find_huc_files(huc_ids)
 
         if logger:
             logger.info(f"Found {len(huc_files)} HUC file(s) to process")
 
-        # Load lidar finder in main process to find intersections
-        finder = LidarSourceFinder(str(self.lidar_resources_path))
+        if not huc_files:
+            return []
 
-        for huc_id, gpkg_path in huc_files:
-            if logger:
-                logger.info(f"Loading bridges from {gpkg_path}...")
-            print(f"Loading bridges from {gpkg_path}...")
-            bridges = self.load_bridges(gpkg_path, osm_ids)
+        args_list = [
+            (
+                huc_id, gpkg_path, osm_ids, str(self.lidar_resources_path),
+                self.buffer_meters, str(self.source_dir), str(self.silver_dir),
+                self.config.to_dict()
+            )
+            for huc_id, gpkg_path in huc_files
+        ]
 
-            if bridges.empty:
-                msg = f"No bridges found in {huc_id}"
-                if logger:
-                    logger.warning(msg)
-                print(msg)
-                continue
+        pool_size = min(self.num_workers, len(huc_files))
+        with multiprocessing.Pool(processes=pool_size) as pool:
+            result_lists = pool.map(_generate_tasks_for_one_huc, args_list)
 
-            msg = f"Found {len(bridges)} bridges in HUC {huc_id}"
-            if logger:
-                logger.info(msg)
-            print(msg)
-
-            for idx, row in bridges.iterrows():
-                osmid = row['osmid']
-                geom = row.geometry
-
-                # Find intersecting sources
-                sources = finder.find_intersecting_sources(geom, self.buffer_meters)
-
-                if not sources:
-                    msg = f"No intersecting sources for bridge {osmid} in HUC {huc_id}"
-                    if logger:
-                        logger.warning(msg)
-                    print(msg)
-                    continue
-
-                # Create task for each source
-                for source in sources:
-                    # Convert geometry to WKT for serialization
-                    geom_wkt = geom.wkt
-                    # Convert config to dict for multiprocessing serialization
-                    config_dict = self.config.to_dict()
-
-                    task = (
-                        huc_id, osmid, geom_wkt, source['url'], source['name'],
-                        self.buffer_meters, str(self.source_dir), str(self.silver_dir), config_dict
-                    )
-                    tasks.append(task)
+        tasks = []
+        for task_list, error_msg in result_lists:
+            tasks.extend(task_list)
+            if error_msg is not None and logger:
+                logger.error(error_msg)
 
         if logger:
-            logger.info(f"Generated {len(tasks)} total tasks for processing")
+            logger.info(f"Generated {len(tasks)} total tasks for processing (from {len(huc_files)} HUCs)")
         return tasks
 
     def process(self, huc_ids: Optional[List[str]] = None,
