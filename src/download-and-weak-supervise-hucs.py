@@ -335,6 +335,8 @@ class WeakSupervisionPipeline:
         buffered_geom = bridge_geometry.buffer(buffer_meters)
         pdal_polygon = buffered_geom.wkt
 
+        original_arrays = None  # Set after first pipeline run; used for save-on-reject
+
         # Stage 1: Read only (Get Raw Data)
         read_pipeline_json = {
             "pipeline": [
@@ -388,7 +390,8 @@ class WeakSupervisionPipeline:
             if count == 0:
                 return {
                     'success': False,
-                    'error': 'No points found in lidar data for this bridge geometry'
+                    'error': 'No points found in lidar data for this bridge geometry',
+                    'original_arrays': original_arrays
                 }
 
             arrays = smrf_pipeline.arrays[0]
@@ -432,7 +435,8 @@ class WeakSupervisionPipeline:
             if np.sum(fit_mask) < config.min_points_for_ransac:
                 return {
                     'success': False,
-                    'error': f'Not enough points for RANSAC fitting ({np.sum(fit_mask)} < {config.min_points_for_ransac})'
+                    'error': f'Not enough points for RANSAC fitting ({np.sum(fit_mask)} < {config.min_points_for_ransac})',
+                    'original_arrays': original_arrays
                 }
 
             # Use local coordinates for fitting
@@ -453,7 +457,8 @@ class WeakSupervisionPipeline:
             if np.sum(inlier_mask) < config.min_ransac_inliers:
                 return {
                     'success': False,
-                    'error': f'Not enough RANSAC inliers ({np.sum(inlier_mask)} < {config.min_ransac_inliers})'
+                    'error': f'Not enough RANSAC inliers ({np.sum(inlier_mask)} < {config.min_ransac_inliers})',
+                    'original_arrays': original_arrays
                 }
 
             # --- MASKING (CONVEX HULL) ---
@@ -468,7 +473,8 @@ class WeakSupervisionPipeline:
             except Exception as e:
                 return {
                     'success': False,
-                    'error': f'Convex hull generation failed: {str(e)}'
+                    'error': f'Convex hull generation failed: {str(e)}',
+                    'original_arrays': original_arrays
                 }
 
             # Create a Global Lateral Mask for ALL points based on the Hull
@@ -496,7 +502,8 @@ class WeakSupervisionPipeline:
             if rmse_inliers > config.max_rmse:
                 return {
                     'success': False,
-                    'error': f'Inlier RMSE too high ({rmse_inliers:.3f}m > {config.max_rmse}m)'
+                    'error': f'Inlier RMSE too high ({rmse_inliers:.3f}m > {config.max_rmse}m)',
+                    'original_arrays': original_arrays
                 }
 
             # Metric 2: Linearity (Global Arch/Sag Check)
@@ -506,7 +513,8 @@ class WeakSupervisionPipeline:
             if is_curved:
                 return {
                     'success': False,
-                    'error': f'Bridge is curved/arched (max deviation: {deviation:.3f}m)'
+                    'error': f'Bridge is curved/arched (max deviation: {deviation:.3f}m)',
+                    'original_arrays': original_arrays
                 }
 
             # --- CLASSIFICATION (HEURISTICS) ---
@@ -536,10 +544,10 @@ class WeakSupervisionPipeline:
             }
 
         except Exception as e:
-            return {
-                'success': False,
-                'error': f'Exception during processing: {str(e)}'
-            }
+            out = {'success': False, 'error': f'Exception during processing: {str(e)}'}
+            if original_arrays is not None:
+                out['original_arrays'] = original_arrays
+            return out
 
 
 class DataManager:
@@ -625,6 +633,37 @@ class DataManager:
             print(f"Error saving files for {osmid}/{source_name}: {e}")
             return False
 
+    def save_source_only(self, original_arrays: Any, huc_id: str, osmid: str, source_name: str, config: BridgeProcessingConfig) -> bool:
+        """
+        Save only the source training file (e.g. when silver is rejected).
+
+        Args:
+            original_arrays: Point arrays to write (e.g. raw or SMRF output)
+            huc_id: HUC identifier
+            osmid: OSM bridge ID
+            source_name: Source name for filename
+            config: BridgeProcessingConfig instance
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            self.ensure_directories(huc_id)
+            source_path, _ = self.get_paths(huc_id, osmid, source_name)
+            writer_source_json = {
+                "pipeline": [{
+                    "type": "writers.las",
+                    "filename": source_path,
+                    "a_srs": config.pdal_writer_srs,
+                    "extra_dims": "all"
+                }]
+            }
+            pdal.Pipeline(json.dumps(writer_source_json), arrays=[original_arrays]).execute()
+            return True
+        except Exception as e:
+            print(f"Error saving source for {osmid}/{source_name}: {e}")
+            return False
+
 
 def process_bridge_source(args: TaskTuple) -> Dict[str, Any]:
     """
@@ -671,6 +710,10 @@ def process_bridge_source(args: TaskTuple) -> Dict[str, Any]:
 
         if result is None or not result.get('success', False):
             error_msg = result.get('error', 'Unknown processing error') if result else 'Processing returned None'
+            if result is not None and 'original_arrays' in result:
+                data_manager.save_source_only(
+                    result['original_arrays'], huc_id, osmid, source_name, config
+                )
             return {
                 'success': False,
                 'huc_id': huc_id,
@@ -898,33 +941,33 @@ class BridgeProcessor:
             print(msg)
             return
 
-        # Process tasks in parallel
-        with multiprocessing.Pool(
-            processes=self.num_workers
-        ) as pool:
-            if show_progress and HAS_TQDM:
-                results = list(tqdm(
-                    pool.imap(process_bridge_source, tasks),
-                    total=len(tasks),
-                    desc="Processing bridges"
-                ))
-            else:
-                results = pool.map(process_bridge_source, tasks)
-
-        # Log all results in main process
+        # Log header before processing so results are written as each task completes
         if logger:
             logger.info("=" * 60)
             logger.info("Processing Results")
             logger.info("=" * 60)
-            for result in results:
-                if result.get('skipped', False):
-                    logger.info(f"[{result['huc_id']}] Skipped OSM ID {result['osmid']} / Source {result['source_name']} (already processed)")
-                elif result['success']:
-                    rmse = result.get('rmse', 0.0)
-                    deviation = result.get('deviation', 0.0)
-                    logger.info(f"[{result['huc_id']}] Successfully processed OSM ID {result['osmid']} / Source {result['source_name']} (RMSE: {rmse:.3f}m, Deviation: {deviation:.3f}m)")
-                else:
-                    logger.error(f"[{result['huc_id']}] OSM ID {result['osmid']} / Source {result['source_name']}: {result['error']}")
+
+        # Process tasks in parallel; log each result as soon as it completes
+        results = []
+        with multiprocessing.Pool(
+            processes=self.num_workers
+        ) as pool:
+            iterator = pool.imap(process_bridge_source, tasks)
+            if show_progress and HAS_TQDM:
+                iterator = tqdm(iterator, total=len(tasks), desc="Processing bridges")
+            for result in iterator:
+                if logger:
+                    if result.get('skipped', False):
+                        logger.info(f"[{result['huc_id']}] Skipped OSM ID {result['osmid']} / Source {result['source_name']} (already processed)")
+                    elif result['success']:
+                        rmse = result.get('rmse', 0.0)
+                        deviation = result.get('deviation', 0.0)
+                        logger.info(f"[{result['huc_id']}] Successfully processed OSM ID {result['osmid']} / Source {result['source_name']} (RMSE: {rmse:.3f}m, Deviation: {deviation:.3f}m)")
+                    else:
+                        logger.error(f"[{result['huc_id']}] OSM ID {result['osmid']} / Source {result['source_name']}: {result['error']}")
+                results.append(result)
+
+        if logger:
             logger.info("=" * 60)
 
         # Aggregate results
