@@ -60,6 +60,7 @@ import json
 import os
 import numpy as np
 import argparse
+import random
 import multiprocessing
 import logging
 import traceback
@@ -352,9 +353,11 @@ class WeakSupervisionPipeline:
         }
 
         try:
+            print("Phase: EPT read 1 start", flush=True)
             pipeline = pdal.Pipeline(json.dumps(read_pipeline_json))
             count = pipeline.execute()
 
+            print("Phase: EPT read 1 done", flush=True)
             if count == 0:
                 return {
                     'success': False,
@@ -385,9 +388,11 @@ class WeakSupervisionPipeline:
                 ]
             }
 
+            print("Phase: EPT+SMRF start", flush=True)
             smrf_pipeline = pdal.Pipeline(json.dumps(smrf_pipeline_json))
             count = smrf_pipeline.execute()
 
+            print("Phase: EPT+SMRF done", flush=True)
             if count == 0:
                 return {
                     'success': False,
@@ -454,6 +459,7 @@ class WeakSupervisionPipeline:
             }
 
             # Fit RANSAC
+            print("Phase: RANSAC start", flush=True)
             try:
                 ransac = RANSACRegressor(
                     min_samples=config.ransac_min_samples,
@@ -476,6 +482,7 @@ class WeakSupervisionPipeline:
                     'original_arrays': original_arrays
                 }
 
+            print("Phase: RANSAC done", flush=True)
             # --- MASKING (CONVEX HULL) ---
             x_inliers = X_fit[inlier_mask]
             y_inliers = Y_fit[inlier_mask]
@@ -522,6 +529,7 @@ class WeakSupervisionPipeline:
                 }
 
             # Metric 2: Linearity (Global Arch/Sag Check)
+            print("Phase: linearity check start", flush=True)
             is_curved, deviation = WeakSupervisionPipeline.check_bridge_linearity(
                 xy_check, z_check, config, deviation_threshold=config.linearity_final_deviation_threshold
             )
@@ -550,6 +558,7 @@ class WeakSupervisionPipeline:
             # Update Arrays
             arrays['Classification'] = new_classes
 
+            print("Phase: done (success)", flush=True)
             return {
                 'original_arrays': original_arrays,  # Original
                 'arrays': arrays,  # Modified after smrf and weak supervision classification
@@ -740,6 +749,11 @@ def process_bridge_source(args: TaskTuple) -> Dict[str, Any]:
                 'skipped': True,
                 'error': None
             }
+
+        # Entry log so we know which task is running when the pipeline appears stuck
+        print(f"[Task start] huc_id={huc_id} osmid={osmid} source_name={source_name} at {datetime.now().isoformat()}", flush=True)
+        if logger:
+            logger.info(f"[Task start] huc_id={huc_id} osmid={osmid} source_name={source_name}")
 
         # Process with weak supervision
         pipeline = WeakSupervisionPipeline()
@@ -959,7 +973,8 @@ class BridgeProcessor:
         return tasks
 
     def process(self, huc_ids: Optional[List[str]] = None,
-                osm_ids: Optional[List[str]] = None, show_progress: bool = True) -> None:
+                osm_ids: Optional[List[str]] = None, show_progress: bool = True,
+                shuffle_seed: Optional[int] = None) -> None:
         """Main processing method with parallel execution."""
         if logger:
             logger.info("=" * 60)
@@ -1003,6 +1018,19 @@ class BridgeProcessor:
             if logger:
                 logger.info(msg)
             print(msg)
+
+        # Shuffle task order so a single stuck bridge does not block the same position every run
+        if shuffle_seed is not None:
+            random.seed(shuffle_seed)
+        random.shuffle(tasks)
+        if shuffle_seed is not None:
+            if logger:
+                logger.info(f"Tasks shuffled (seed={shuffle_seed})")
+            print(f"Tasks shuffled (seed={shuffle_seed})")
+        else:
+            if logger:
+                logger.info("Tasks shuffled (random order)")
+            print("Tasks shuffled (random order)")
 
         if not tasks:
             msg = "All tasks already processed."
@@ -1199,6 +1227,13 @@ def main() -> None:
     )
 
     parser.add_argument(
+        '--shuffle-seed',
+        type=int,
+        default=None,
+        help='Optional seed for task shuffle (reproducible order for debugging). If not set, tasks are shuffled randomly.'
+    )
+
+    parser.add_argument(
         '--no-progress',
         action='store_true',
         help='Disable progress bar'
@@ -1233,7 +1268,8 @@ def main() -> None:
     processor.process(
         huc_ids=args.hucs,
         osm_ids=args.osm_ids,
-        show_progress=not args.no_progress
+        show_progress=not args.no_progress,
+        shuffle_seed=args.shuffle_seed
     )
 
 
