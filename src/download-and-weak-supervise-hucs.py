@@ -32,7 +32,7 @@ Custom Configuration:
     python src/download-and-weak-supervise-hucs.py --buffer 15.0 --workers 8
 
 Resume Processing:
-    # Skip already processed files (useful for resuming interrupted runs)
+    # Skip already processed files and bridges that previously had no lidar points (useful for resuming interrupted runs)
     python src/download-and-weak-supervise-hucs.py --skip-existing
 
 Custom Directories:
@@ -446,14 +446,28 @@ class WeakSupervisionPipeline:
             Z_fit = Z[fit_mask]
             xy_fit = np.stack([X_fit, Y_fit], axis=1)
 
+            if len(np.unique(xy_fit, axis=0)) < config.ransac_min_samples:
+             return {
+                'success': False,
+                'error': f'Not enough UNIQUE points for RANSAC',
+                'original_arrays': original_arrays
+            }
+
             # Fit RANSAC
-            ransac = RANSACRegressor(
-                min_samples=config.ransac_min_samples,
-                residual_threshold=config.ransac_residual_threshold,
-                random_state=config.ransac_random_state
-            )
-            ransac.fit(xy_fit, Z_fit)
-            inlier_mask = ransac.inlier_mask_
+            try:
+                ransac = RANSACRegressor(
+                    min_samples=config.ransac_min_samples,
+                    residual_threshold=config.ransac_residual_threshold,
+                    random_state=config.ransac_random_state
+                )
+                ransac.fit(xy_fit, Z_fit)
+                inlier_mask = ransac.inlier_mask_
+            except Exception as e:
+                return {
+                    'success': False,
+                    'error': f'RANSAC fitting failed: {str(e)}',
+                    'original_arrays': original_arrays
+                }
 
             if np.sum(inlier_mask) < config.min_ransac_inliers:
                 return {
@@ -592,6 +606,27 @@ class DataManager:
         # since we are saving source file both for success and failure, we only need to check the source file
         return Path(source_path).exists()
 
+    def _safe_source_name(self, source_name: str) -> str:
+        """Sanitize source_name for use in filenames (same logic as get_paths)."""
+        safe = source_name.replace('/', '_').replace('\\', '_').replace(':', '_').replace(' ', '_')
+        return ''.join(c if c.isalnum() or c in '._-' else '_' for c in safe)
+
+    def no_points_sentinel_path(self, huc_id: str, osmid: str, source_name: str) -> Path:
+        """Path to sentinel file indicating no lidar points were found for this bridge/source."""
+        safe_source_name = self._safe_source_name(source_name)
+        filename = f"bridge_{osmid}_{safe_source_name}.no_points"
+        return self.source_dir / huc_id / filename
+
+    def no_points_sentinel_exists(self, huc_id: str, osmid: str, source_name: str) -> bool:
+        """Check if a no-points sentinel exists (skip on restart with --skip-existing)."""
+        return self.no_points_sentinel_path(huc_id, osmid, source_name).exists()
+
+    def write_no_points_sentinel(self, huc_id: str, osmid: str, source_name: str) -> None:
+        """Write sentinel so this (huc_id, osmid, source_name) is skipped on restart with --skip-existing."""
+        self.ensure_directories(huc_id)
+        path = self.no_points_sentinel_path(huc_id, osmid, source_name)
+        path.write_text("# No points found in lidar data for this bridge geometry\n")
+
     def save_files(self, original_arrays: Any, modified_arrays: Any, huc_id: str, osmid: str, source_name: str, config: BridgeProcessingConfig) -> bool:
         """
         Save both source and silver training files.
@@ -716,6 +751,10 @@ def process_bridge_source(args: TaskTuple) -> Dict[str, Any]:
                 data_manager.save_source_only(
                     result['original_arrays'], huc_id, osmid, source_name, config
                 )
+            else:
+                # No file saved (e.g. count==0 from EPT read). Write sentinel so --skip-existing skips on restart.
+                if result is not None and error_msg == 'No points found in lidar data for this bridge geometry':
+                    data_manager.write_no_points_sentinel(huc_id, osmid, source_name)
             return {
                 'success': False,
                 'huc_id': huc_id,
@@ -954,13 +993,13 @@ class BridgeProcessor:
 
             for task in tasks:
                 huc_id, osmid, _, _, source_name, _, _, _, _ = task
-                if data_manager.file_exists(huc_id, osmid, source_name):
+                if data_manager.file_exists(huc_id, osmid, source_name) or data_manager.no_points_sentinel_exists(huc_id, osmid, source_name):
                     skipped_count += 1
                 else:
                     filtered_tasks.append(task)
 
             tasks = filtered_tasks
-            msg = f"Skipped {skipped_count} already processed tasks. {len(tasks)} tasks remaining."
+            msg = f"Skipped {skipped_count} already processed or known-empty tasks. {len(tasks)} tasks remaining."
             if logger:
                 logger.info(msg)
             print(msg)
@@ -980,9 +1019,7 @@ class BridgeProcessor:
 
         # Process tasks in parallel; log each result as soon as it completes
         results = []
-        with multiprocessing.Pool(
-            processes=self.num_workers
-        ) as pool:
+        with multiprocessing.Pool(processes=self.num_workers, maxtasksperchild=50) as pool:
             iterator = pool.imap(process_bridge_source, tasks)
             if show_progress and HAS_TQDM:
                 iterator = tqdm(iterator, total=len(tasks), desc="Processing bridges")
