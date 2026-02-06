@@ -329,10 +329,8 @@ if HAS_LIGHTNING:
             # Default class weights: [Background, Ground/ Water, Bridge Deck, Obstacle]
             # calculated weights from utils/calculate_weights.py
             if class_weights is None:
-                # mac
-                # class_weights = [5.554448601617274, 1.3683353169973125, 0.3819817544841005, 2.122137404580153]
-                # ubuntu server
-                class_weights = [5.541478352538639, 1.3688236995495695, 0.38211636815295946, 2.1187130327090355]
+                # training data weights
+                class_weights = [6.216962881360028, 1.4907158415241706, 0.36471562073348884, 2.3448372700679068]
 
             self.register_buffer('class_weights', torch.tensor(class_weights, dtype=torch.float32))
             self.criterion = nn.CrossEntropyLoss(weight=self.class_weights)
