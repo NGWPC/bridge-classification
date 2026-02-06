@@ -22,6 +22,10 @@ Usage:
         --output-dir ./data/ml-data \
         --symlink \
         --seed 27
+
+    # With holdout test IDs (gold/test set fixed; excluded from train/val)
+    python utils/split_data.py --holdout-test-ids holdout_test_ids.txt ...
+    # File format: one line per bridge, huc_id/bridge_stem (same as split_test_ids.txt)
 """
 
 import argparse
@@ -30,7 +34,7 @@ import multiprocessing
 import random
 import shutil
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 try:
     from tqdm import tqdm
@@ -59,6 +63,50 @@ def discover_bridges_by_huc(input_dir: Path) -> Dict[str, List[Path]]:
         # Sort ensures deterministic order before shuffling
         huc_bridges[huc_id] = sorted(laz_files)
     return huc_bridges
+
+
+def _load_holdout_test_ids(path: Path) -> Tuple[List[Tuple[str, str]], Set[Tuple[str, str]]]:
+    """
+    Load holdout test IDs from file (one line per bridge: huc_id/bridge_stem).
+
+    Returns:
+        (list in file order, deduped; set for fast lookup).
+    """
+    if not path.exists():
+        raise FileNotFoundError(f"Holdout test IDs file not found: {path}")
+    pairs: List[Tuple[str, str]] = []
+    with open(path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("/", 1)
+            if len(parts) != 2:
+                raise ValueError(f"Invalid holdout line (expected huc_id/bridge_stem): {line!r}")
+            pairs.append((parts[0], parts[1]))
+    # Dedupe preserving order (first occurrence wins)
+    seen: Set[Tuple[str, str]] = set()
+    deduped: List[Tuple[str, str]] = []
+    for p in pairs:
+        if p not in seen:
+            seen.add(p)
+            deduped.append(p)
+    return (deduped, seen)
+
+
+def _filter_holdout_from_pool(
+    huc_bridges: Dict[str, List[Path]],
+    holdout_set: Set[Tuple[str, str]],
+) -> Dict[str, List[Path]]:
+    """
+    Exclude holdout (huc_id, bridge_stem) from the pool. Omit HUCs that end up empty.
+    """
+    filtered: Dict[str, List[Path]] = {}
+    for huc_id, laz_paths in huc_bridges.items():
+        kept = [p for p in laz_paths if (huc_id, p.stem) not in holdout_set]
+        if kept:
+            filtered[huc_id] = kept
+    return filtered
 
 
 def assign_splits(
@@ -296,6 +344,12 @@ def main() -> None:
         default=None,
         help="Test fraction; see --train-ratio. If none provided, defaults 0.70/0.15/0.15 are used.",
     )
+    parser.add_argument(
+        "--holdout-test-ids",
+        type=Path,
+        default=None,
+        help="Path to file of holdout test IDs (one per line: huc_id/bridge_stem). These bridges are always placed in testing/ and excluded from train/val.",
+    )
 
     args = parser.parse_args()
 
@@ -379,10 +433,32 @@ def main() -> None:
     total_bridges = sum(len(x) for x in huc_bridges.values())
     print(f"Found {total_bridges} bridges in {len(huc_bridges)} HUCs.")
 
-    # 3. Calculate Split
-    train_ids, val_ids, test_ids = assign_splits(
-        huc_bridges, args.seed, train_r, val_r, test_r
-    )
+    # 3. Calculate Split (optionally exclude holdout from pool, then merge into test)
+    if args.holdout_test_ids is not None:
+        holdout_path = args.holdout_test_ids.resolve()
+        try:
+            holdout_list, holdout_set = _load_holdout_test_ids(holdout_path)
+        except FileNotFoundError as e:
+            raise SystemExit(f"Error: {e}") from e
+        except ValueError as e:
+            raise SystemExit(f"Error: {e}") from e
+        full_bridge_set: Set[Tuple[str, str]] = set()
+        for huc_id, paths in huc_bridges.items():
+            for p in paths:
+                full_bridge_set.add((huc_id, p.stem))
+        holdout_present = [(h, b) for (h, b) in holdout_list if (h, b) in full_bridge_set]
+        for (h, b) in holdout_list:
+            if (h, b) not in full_bridge_set:
+                print(f"Warning: Holdout ID not found in data: {h}/{b}")
+        huc_bridges_pool = _filter_holdout_from_pool(huc_bridges, holdout_set)
+        train_ids, val_ids, split_test_ids = assign_splits(
+            huc_bridges_pool, args.seed, train_r, val_r, test_r
+        )
+        test_ids = holdout_present + split_test_ids
+    else:
+        train_ids, val_ids, test_ids = assign_splits(
+            huc_bridges, args.seed, train_r, val_r, test_r
+        )
 
     # 4. Clean existing output dirs
     for s in SPLIT_NAMES:
@@ -408,7 +484,7 @@ def main() -> None:
     print("Split Complete")
     print("="*50)
     print(f"Ratios:     train={train_r:.2f} val={val_r:.2f} test={test_r:.2f}")
-    print(f"Seed used:  {args.seed} (Verified against previous workflow)")
+    print(f"Seed used:  {args.seed}")
     print(f"Training:   {len(train_ids)} bridges (.npy/.json)")
     print(f"Validation: {len(val_ids)} bridges (.npy/.json)")
     print(f"Testing:    {len(test_ids)} bridges (.laz AND .npy/.json)")

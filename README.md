@@ -49,7 +49,7 @@ docker compose run --rm bridge-classifier python src/download-and-weak-supervise
 docker compose run --rm bridge-classifier python src/preprocess_bridges.py --input-dir ./data/ml-data/silver_training --output-dir ./data/ml-data/silver_training_normalized
 
 # Step 3: Split data (train/val/test)
-docker compose run --rm bridge-classifier python utils/split_data.py --laz-dir ./data/ml-data/silver_training --npy-dir ./data/ml-data/silver_training_normalized --output-dir ./data/ml-data --train-ratio 0.8 --val-ratio 0.2 --symlink
+docker compose run --rm bridge-classifier python utils/split_data.py --laz-dir ./data/ml-data/silver_training --npy-dir ./data/ml-data/silver_training_normalized --output-dir ./data/ml-data --holdout-test-ids ./data/ml-data/holdout_test.txt --train-ratio 0.8 --val-ratio 0.2 --symlink
 
 # Step 4: Train Model (Requires NVIDIA GPU)
 docker compose run --rm bridge-classifier python src/train.py --train --augment --val-dir='./data/ml-data/validation' --train-dir='./data/ml-data/training' --epochs 50 --batch-size 16 --exp-name bridge-base-v0
