@@ -16,11 +16,41 @@ Usage:
 
 import argparse
 import json
+import multiprocessing
 from pathlib import Path
 from collections import defaultdict
+from typing import List, Optional, Tuple
+
+try:
+    from tqdm import tqdm
+    HAS_TQDM = True
+except ImportError:
+    HAS_TQDM = False
 
 
-def load_class_counts(data_dir: Path) -> dict[int, int]:
+def _load_one_json(path: Path) -> Tuple[dict[int, int], Optional[Path]]:
+    """
+    Load class_distribution from one JSON file (picklable worker).
+
+    Returns:
+        (class_id -> count dict, None) on success; ({}, path) on exception.
+    """
+    try:
+        with open(path, "r") as f:
+            meta = json.load(f)
+        counts: dict[int, int] = {}
+        for class_id, count in meta.get("class_distribution", {}).items():
+            counts[int(class_id)] = count
+        return (counts, None)
+    except Exception:
+        return ({}, path)
+
+
+def load_class_counts(
+    data_dir: Path,
+    num_workers: Optional[int] = None,
+    json_files: Optional[List[Path]] = None,
+) -> dict[int, int]:
     """
     Load and aggregate class counts from all JSON metadata files under data_dir.
 
@@ -29,23 +59,44 @@ def load_class_counts(data_dir: Path) -> dict[int, int]:
 
     Args:
         data_dir: Root path (e.g. silver_training_normalized) to search for *.json.
+        num_workers: If > 1, use multiprocessing to read JSONs in parallel.
+        json_files: If provided, use this list instead of rglob (avoids double scan).
 
     Returns:
         Mapping from class_id (int) to total point count across all files.
         Empty dict if no JSON files found.
     """
-    json_files = list(data_dir.rglob("*.json"))
+    if json_files is None:
+        json_files = list(data_dir.rglob("*.json"))
     total_counts: dict[int, int] = defaultdict(int)
+    workers = num_workers if num_workers is not None else 1
 
-    for jf in json_files:
-        try:
-            with open(jf, "r") as f:
-                meta = json.load(f)
-            for class_id, count in meta.get("class_distribution", {}).items():
-                total_counts[int(class_id)] += count
-        except Exception as e:
-            print(f"Error reading {jf}: {e}")
+    if workers <= 1:
+        iterator = json_files
+        if HAS_TQDM:
+            iterator = tqdm(json_files, desc="Reading JSON")
+        for jf in iterator:
+            try:
+                with open(jf, "r") as f:
+                    meta = json.load(f)
+                for class_id, count in meta.get("class_distribution", {}).items():
+                    total_counts[int(class_id)] += count
+            except Exception as e:
+                print(f"Error reading {jf}: {e}")
+        return dict(total_counts)
 
+    # Parallel: map worker over files, merge dicts, collect errors
+    with multiprocessing.Pool(processes=workers) as pool:
+        raw_iterator = pool.imap_unordered(_load_one_json, json_files)
+        if HAS_TQDM:
+            raw_iterator = tqdm(raw_iterator, total=len(json_files), desc="Reading JSON")
+        results = list(raw_iterator)
+    for d, err in results:
+        if d:
+            for k, v in d.items():
+                total_counts[k] += v
+        if err is not None:
+            print(f"Error reading {err}")
     return dict(total_counts)
 
 
@@ -156,8 +207,8 @@ def main() -> None:
     parser.add_argument(
         "--data-dir",
         type=Path,
-        default=Path("./data/ml-data/silver_training_normalized"),
-        help="Path to 'silver_training_normalized' directory",
+        default=Path("./data/ml-data/training"),
+        help="Path to training .npy files directory",
     )
     parser.add_argument(
         "--output",
@@ -170,9 +221,15 @@ def main() -> None:
         action="store_true",
         help="Print raw total_counts and weights_list",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of workers for reading JSON files (default: 1). Use 1 for sequential.",
+    )
     args = parser.parse_args()
 
-    data_dir: Path = args.data_dir
+    data_dir = args.data_dir.resolve()
     json_files = list(data_dir.rglob("*.json"))
 
     if not json_files:
@@ -181,7 +238,9 @@ def main() -> None:
 
     print(f"Found {len(json_files)} metadata files. Aggregating stats...")
 
-    total_counts = load_class_counts(data_dir)
+    total_counts = load_class_counts(
+        data_dir, num_workers=args.workers, json_files=json_files
+    )
     if not total_counts:
         print("No class distribution data found in any JSON.")
         return
@@ -203,4 +262,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # multiprocessing.set_start_method('spawn', force=True)
     main()
