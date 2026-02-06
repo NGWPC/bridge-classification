@@ -29,7 +29,7 @@ except ImportError:
 
 
 # --- LOGICAL CLASS MAPPING ---
-# Maps standard ASPRS/LAS codes to Model Training Labels (0-4)
+# Maps standard ASPRS/LAS codes to Model Training Labels (0-3)
 # 0: Background/Unclassified (included merged piers/pylons)
 # 1: Ground/ Water (Non-Bridge Surface)
 # 2: Bridge Deck (Primary Target)

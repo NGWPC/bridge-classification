@@ -26,10 +26,17 @@ Usage:
 
 import argparse
 import json
+import multiprocessing
 import random
 import shutil
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
+
+try:
+    from tqdm import tqdm
+    HAS_TQDM = True
+except ImportError:
+    HAS_TQDM = False
 
 
 SPLIT_NAMES = ("training", "validation", "testing")
@@ -80,6 +87,9 @@ def assign_splits(
         n_train = int(train_ratio * n)
         n_val = int(val_ratio * n)
         n_test = n - n_train - n_val
+        if test_ratio == 0:
+            n_test = 0
+            n_val = n - n_train
 
         i = 0
         for _ in range(n_train):
@@ -118,6 +128,47 @@ def transfer_file(src: Path, dst: Path, use_symlink: bool):
         shutil.copy2(src, dst)
 
 
+def _transfer_task(args: Tuple[str, str, bool]) -> None:
+    """
+    Picklable worker for multiprocessing: performs one copy/symlink.
+
+    Args:
+        args: (src_str, dst_str, use_symlink) with paths as strings for pickling.
+    """
+    src_str, dst_str, use_symlink = args
+    transfer_file(Path(src_str), Path(dst_str), use_symlink)
+
+
+def _build_transfer_tasks(
+    laz_dir: Path,
+    npy_dir: Path,
+    output_dir: Path,
+    train_ids: List[Tuple[str, str]],
+    val_ids: List[Tuple[str, str]],
+    test_ids: List[Tuple[str, str]],
+    use_symlink: bool,
+) -> List[Tuple[str, str, bool]]:
+    """
+    Build a flat list of (src_str, dst_str, use_symlink) for all file transfers.
+    """
+    task_defs = [
+        # Split Name | ID List | Source Dir | Extensions
+        ("training", train_ids, npy_dir, [".npy", ".json"]),
+        ("validation", val_ids, npy_dir, [".npy", ".json"]),
+        ("testing", test_ids, laz_dir, [".laz"]),            # For Humans
+        ("testing", test_ids, npy_dir, [".npy", ".json"]),   # For Model
+    ]
+    tasks: List[Tuple[str, str, bool]] = []
+    for split_name, id_list, source_root, extensions in task_defs:
+        split_base = output_dir / split_name
+        for huc_id, bridge_stem in id_list:
+            for ext in extensions:
+                src = source_root / huc_id / f"{bridge_stem}{ext}"
+                dst = split_base / huc_id / f"{bridge_stem}{ext}"
+                tasks.append((str(src), str(dst), use_symlink))
+    return tasks
+
+
 def write_split_dirs(
     laz_dir: Path,
     npy_dir: Path,
@@ -126,33 +177,39 @@ def write_split_dirs(
     val_ids: List[Tuple[str, str]],
     test_ids: List[Tuple[str, str]],
     use_symlink: bool,
+    num_workers: Optional[int] = None,
 ) -> None:
     """
     Create training/, validation/, testing/ directories.
     - Training/Validation: Get .npy and .json from npy_dir.
     - Testing: Gets .laz (from laz_dir) AND .npy/.json (from npy_dir).
+
+    Args:
+        num_workers: Number of parallel workers (None = CPU count, 1 = sequential).
     """
+    tasks = _build_transfer_tasks(
+        laz_dir, npy_dir, output_dir, train_ids, val_ids, test_ids, use_symlink
+    )
+    n_tasks = len(tasks)
+    workers = num_workers if num_workers is not None else multiprocessing.cpu_count()
 
-    # Define distribution logic
-    tasks = [
-        # Split Name   | ID List    | Source Dir | Extensions
-        ("training",    train_ids,   npy_dir,     [".npy", ".json"]),
-        ("validation",  val_ids,     npy_dir,     [".npy", ".json"]),
-
-        # Testing gets BOTH formats:
-        ("testing",     test_ids,    laz_dir,     [".laz"]),            # For Humans
-        ("testing",     test_ids,    npy_dir,     [".npy", ".json"]),   # For Model
-    ]
-
-    for split_name, id_list, source_root, extensions in tasks:
-        print(f"Populating {split_name} with {extensions} from {source_root.name}...")
-        split_base = output_dir / split_name
-
-        for huc_id, bridge_stem in id_list:
-            for ext in extensions:
-                src = source_root / huc_id / f"{bridge_stem}{ext}"
-                dst = split_base / huc_id / f"{bridge_stem}{ext}"
-                transfer_file(src, dst, use_symlink)
+    if workers <= 1:
+        iterator = tasks
+        if HAS_TQDM:
+            iterator = tqdm(tasks, desc="Transferring files", total=n_tasks)
+        for task in iterator:
+            _transfer_task(task)
+    else:
+        print(f"Transferring {n_tasks} files with {workers} workers...")
+        with multiprocessing.Pool(processes=workers) as pool:
+            if HAS_TQDM:
+                list(tqdm(
+                    pool.imap_unordered(_transfer_task, tasks),
+                    total=n_tasks,
+                    desc="Transferring files",
+                ))
+            else:
+                pool.map(_transfer_task, tasks)
 
 
 def write_manifests(
@@ -213,6 +270,12 @@ def main() -> None:
         "--symlink",
         action="store_true",
         help="Use symlinks instead of copying (Recommended)",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=multiprocessing.cpu_count(),
+        help="Number of parallel workers for file transfer (default: CPU count). Use 1 for sequential.",
     )
     # Ratios (default=None so we can detect "not provided"; if none given, use 0.70/0.15/0.15)
     parser.add_argument(
@@ -331,7 +394,12 @@ def main() -> None:
             shutil.rmtree(path)
 
     # 5. Distribute Files
-    write_split_dirs(laz_dir, npy_dir, output_dir, train_ids, val_ids, test_ids, args.symlink)
+    write_split_dirs(
+        laz_dir, npy_dir, output_dir,
+        train_ids, val_ids, test_ids,
+        args.symlink,
+        num_workers=args.workers,
+    )
 
     # 6. Write Manifests
     write_manifests(output_dir, train_ids, val_ids, test_ids)
