@@ -65,6 +65,20 @@ docker compose build
 docker build --platform linux/amd64 -t bridge-classifier .
 ```
 
+**Before running with Docker:**
+
+- **Environment file:** Copy `.env.example` to `.env` and edit if needed. `DATA_DIR` is used by docker-compose to mount the ML data directory (e.g. `/data/ml-data` or an absolute path on the host).
+
+  ```bash
+  cp .env.example .env
+  ```
+
+- **Experiments directory (before training):** Create the experiments directory at repo root and make it writable so the container can write logs and checkpoints (default `./experiments`). Required when using Docker; without it, Step 4 (Train Model) may fail with a permission error.
+
+  ```bash
+  mkdir -p experiments && chmod 777 experiments
+  ```
+
 **Run the Pipeline**:
 
 ```bash
@@ -83,10 +97,32 @@ docker compose run --rm bridge-classifier python utils/split_data.py --laz-dir .
 # Step 3a: Compute class weights (optional). Use output in training with --class-weights ./data/ml-data/class_weights.json
 docker compose run --rm bridge-classifier python utils/calculate_weights.py --data-dir ./data/ml-data/training --output ./data/ml-data/class_weights.json
 
-# Step 4: Train Model (Requires NVIDIA GPU). Pass class weights: add --class-weights ./data/ml-data/class_weights.json if you ran Step 3a.
+# Step 4: Train Model (Requires NVIDIA GPU). Ensure the experiments directory exists and is writable (see setup above).
+# Pass class weights: add --class-weights ./data/ml-data/class_weights.json if you ran Step 3a.
 # if gpu has headroom: batch_size -> 32
 # num_workers: For 550K files, 4–8 can help; increase if CPU/disk are the bottleneck.
-docker compose run --rm bridge-classifier python src/train.py --train --augment --val-dir='./data/ml-data/validation' --train-dir='./data/ml-data/training' --epochs 50 --batch-size 16 --exp-name bridge-base-v0
+
+# used for g5.2xlarge ec2
+# change rules
+# --batch-size 4 --accumulate-grad-batches 4 → effective 16, ~half the steps per epoch.
+# --batch-size 8 --accumulate-grad-batches 2 → effective 16, ~quarter of the steps (if it doesn’t OOM).
+
+docker compose run --rm \
+-e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+bridge-classifier python src/train.py \
+  --train --augment \
+  --val-dir='/data/ml-data/validation' \
+  --train-dir='/data/ml-data/training' \
+  --epochs 10 \
+  --voxel-size 0.1 \
+  --batch-size 4 \
+  --accumulate-grad-batches 4 \
+  --exp-name bridge-base-all-data-v0 \
+  --class-weights /data/ml-data/class_weights.json \
+  --num-workers 4 \
+  --early-stopping \
+  --early-stopping-patience 6 \
+  --max-voxels 100000
 ```
 
 **Training options** (for `src/train.py`):
@@ -186,7 +222,7 @@ See [Troubleshooting](#troubleshooting) for libstdc++ and other issues.
 
 ## Troubleshooting
 
-- **Permission denied**: When running the pipeline (e.g. writing to `data/`), ensure permissions: `chmod -R 777 <folder>`.
+- **Permission denied**: When running the pipeline (e.g. writing to `data/`), ensure permissions: `chmod -R 777 <folder>`. If training fails with permission errors on the experiments directory, ensure `experiments` exists and is writable: `mkdir -p experiments && chmod 777 experiments`.
 - **libstdc++ / CXXABI_1.3.15**: Common on Linux. Try `mamba install -c conda-forge libstdcxx-ng`. If that fails, run before scripts: `export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH`.
 - **NumPy and spconv**: Pin NumPy to avoid "Floating point exception (core dumped)" ([spconv #725](https://github.com/traveller59/spconv/issues/725)): `mamba install numpy=1.26.4`.
 - **No JSON files / no class distribution**: If `calculate_weights.py` reports no files or no distribution, run the split step (Step 3) first and use `--data-dir ./data/ml-data/training`.
@@ -288,6 +324,18 @@ The normalization script generates JSON metadata files with the following struct
 ```
 
 ## Visualizing training metrics
+
+### Viewing TensorBoard while training is running
+
+You can run TensorBoard in a separate terminal (same Docker image) to watch metrics live. Use `-p 6006:6006` to map the container port to the host so you can open `http://localhost:6006` in the browser. Use `--bind_all` so TensorBoard listens on all interfaces (needed when running inside Docker).
+
+```bash
+docker compose run -p 6006:6006 --rm bridge-classifier tensorboard --logdir=experiments/bridge-base-all-data-v0/version_0/ --bind_all
+```
+
+The `--logdir` path should match your experiment name and version (e.g. `experiments/<exp_name>/version_<N>/`). If you use a different `--experiments-dir` when training, use that base path for `--logdir`. TensorBoard logs are written by Lightning's TensorBoardLogger to the same directory as the CSV metrics.
+
+### CSV metrics and static plots
 
 Training (Step 4) writes metrics via Lightning CSVLogger to `./experiments/<exp_name>/version_<N>/metrics.csv`. The script `utils/visualize_metrics.py` plots loss and deck/overall accuracy curves and saves `training_curves.png` in the same directory.
 
