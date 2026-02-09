@@ -28,6 +28,8 @@ Usage:
 """
 
 import os
+import json
+import shutil
 import argparse
 from pathlib import Path
 from typing import Dict, Tuple, List, Optional
@@ -57,7 +59,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 try:
     import pytorch_lightning as pl
     from pytorch_lightning import LightningModule, LightningDataModule, Trainer
-    from pytorch_lightning.callbacks import ModelCheckpoint
+    from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
     HAS_LIGHTNING = True
 except ImportError:
     HAS_LIGHTNING = False
@@ -304,6 +306,8 @@ if HAS_LIGHTNING:
             learning_rate=0.001,
             weight_decay=0.01,
             class_weights=None,
+            monitor='val_loss',
+            monitor_mode='min',
         ):
             """
             Args:
@@ -313,9 +317,13 @@ if HAS_LIGHTNING:
                 learning_rate: Learning rate for optimizer (default: 0.001)
                 weight_decay: Weight decay for optimizer (default: 0.01)
                 class_weights: Class weights for loss function (default: None)
+                monitor: Metric name for ReduceLROnPlateau (default: val_loss)
+                monitor_mode: 'min' or 'max' for ReduceLROnPlateau (default: min)
             """
             super().__init__()
             self.save_hyperparameters()
+            self.monitor = monitor
+            self.monitor_mode = monitor_mode
 
             self.model = SparseUNet(
                 input_channels=input_channels,
@@ -329,7 +337,7 @@ if HAS_LIGHTNING:
             # Default class weights: [Background, Ground/ Water, Bridge Deck, Obstacle]
             # calculated weights from utils/calculate_weights.py
             if class_weights is None:
-                # training data weights
+                # default training data weights
                 class_weights = [6.216962881360028, 1.4907158415241706, 0.36471562073348884, 2.3448372700679068]
 
             self.register_buffer('class_weights', torch.tensor(class_weights, dtype=torch.float32))
@@ -440,9 +448,9 @@ if HAS_LIGHTNING:
             # Add ReduceLROnPlateau
             scheduler = {
                 'scheduler': optim.lr_scheduler.ReduceLROnPlateau(
-                    optimizer, mode='min', factor=0.5, patience=5, min_lr=1e-6
+                    optimizer, mode=self.monitor_mode, factor=0.5, patience=5, min_lr=1e-6
                 ),
-                'monitor': 'val_loss', # Required for ReduceLROnPlateau
+                'monitor': self.monitor,
                 'interval': 'epoch',
                 'frequency': 1
             }
@@ -872,10 +880,38 @@ def main():
     )
 
     parser.add_argument(
+        '--class-weights',
+        type=str,
+        default=None,
+        help='Path to JSON file with "weights" list from calculate_weights.py --output. If not set, uses built-in default weights.',
+    )
+
+    parser.add_argument(
         '--gpus',
         type=int,
         default=None,
         help='Number of GPUs to use (0 for CPU, >0 for GPU, None for auto-detect).'
+    )
+
+    parser.add_argument(
+        '--early-stopping',
+        action='store_true',
+        default=False,
+        help='Stop training when the monitored metric (see --monitor) does not improve for --early-stopping-patience epochs (requires validation).',
+    )
+
+    parser.add_argument(
+        '--early-stopping-patience',
+        type=int,
+        default=10,
+        help='Number of epochs with no improvement after which to stop (used only if --early-stopping).',
+    )
+
+    parser.add_argument(
+        '--monitor',
+        type=str,
+        default='val_deck_iou',
+        help='Metric to monitor for checkpointing and early stopping (default: val_deck_iou). Use val_deck_iou for best deck IoU, val_loss for validation loss. Ignored when no validation data (train_loss used).',
     )
 
     args = parser.parse_args()
@@ -888,6 +924,34 @@ def main():
 
         train_dir = args.train_dir
         val_dir = args.val_dir
+        class_weights_list: Optional[List[float]] = None
+
+        if args.class_weights is not None:
+            cw_path = Path(args.class_weights).expanduser().resolve()
+            if not cw_path.exists():
+                raise SystemExit(f"Error: --class-weights file not found: {cw_path}")
+            try:
+                with open(cw_path, "r") as f:
+                    cw_obj = json.load(f)
+                weights = cw_obj.get("weights")
+                if not isinstance(weights, list):
+                    raise SystemExit(
+                        f'Error: --class-weights JSON must contain a "weights" list. Got: {type(weights)}'
+                    )
+                if len(weights) != 4:
+                    raise SystemExit(
+                        f"Error: --class-weights must have 4 values for classes 0-3; got {len(weights)}"
+                    )
+                class_weights_list = [float(x) for x in weights]
+            except json.JSONDecodeError as e:
+                raise SystemExit(f"Error: invalid JSON in --class-weights file: {cw_path}\n{e}") from e
+
+        has_validation = (
+            (val_dir and os.path.isdir(val_dir) and len(list(Path(val_dir).rglob("*.npy"))) > 0)
+            or args.val_split > 0
+        )
+        effective_monitor = args.monitor if has_validation else 'train_loss'
+        monitor_mode = 'max' if 'iou' in effective_monitor.lower() else 'min'
 
         if val_dir is None or (not os.path.isdir(val_dir)):
             if args.val_split > 0:
@@ -913,7 +977,13 @@ def main():
         print(f"Epochs: {args.epochs}")
         print(f"Learning rate: {args.learning_rate}")
         print(f"Augmentation: {args.augment}")
+        print(
+            "Class weights: "
+            + (str(Path(args.class_weights).expanduser().resolve()) if args.class_weights else "default (built-in)")
+        )
         print(f"Experiment name: {args.exp_name}")
+        if args.early_stopping:
+            print(f"Early stopping: patience={args.early_stopping_patience} ({effective_monitor}).")
         print("=" * 60)
 
         # Create data module
@@ -934,6 +1004,9 @@ def main():
             base_channels=args.base_channels,
             learning_rate=args.learning_rate,
             weight_decay=args.weight_decay,
+            class_weights=class_weights_list,
+            monitor=effective_monitor,
+            monitor_mode=monitor_mode,
         )
 
         # Logger: TensorBoard
@@ -949,17 +1022,24 @@ def main():
             version=tensorboard_logger.version,
         )
 
+        # Archive class weights used for this run (self-contained)
+        log_dir = Path(tensorboard_logger.log_dir)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        class_weights_dest = log_dir / "class_weights.json"
+        if args.class_weights is not None:
+            shutil.copy2(Path(args.class_weights).expanduser().resolve(), class_weights_dest)
+        else:
+            weights_used = model.class_weights.cpu().tolist()
+            with open(class_weights_dest, "w") as f:
+                json.dump({"weights": weights_used, "source": "built-in default"}, f, indent=2)
+
         # Setup checkpoint callback (use train_loss when no validation data)
-        has_validation = (
-            (val_dir and os.path.isdir(val_dir) and len(list(Path(val_dir).rglob("*.npy"))) > 0)
-            or args.val_split > 0
-        )
         if has_validation:
             checkpoint_callback = ModelCheckpoint(
-                filename='bridge-unet-{epoch:02d}-{val_loss:.4f}',
-                monitor='val_loss',
+                filename=f'bridge-unet-{{epoch:02d}}-{{{effective_monitor}:.4f}}',
+                monitor=effective_monitor,
                 save_top_k=5,
-                mode='min',
+                mode=monitor_mode,
                 save_last=True
             )
         else:
@@ -970,6 +1050,19 @@ def main():
                 mode='min',
                 save_last=True
             )
+
+        callbacks = [checkpoint_callback]
+        if args.early_stopping and has_validation:
+            callbacks.append(
+                EarlyStopping(
+                    monitor=effective_monitor,
+                    mode=monitor_mode,
+                    patience=args.early_stopping_patience,
+                    verbose=True,
+                )
+            )
+        elif args.early_stopping and not has_validation:
+            print("Note: --early-stopping requires validation; early stopping not enabled.")
 
         # Create trainer
         # Determine accelerator and devices based on gpus argument
@@ -991,7 +1084,7 @@ def main():
             accelerator=accelerator,
             devices=devices,
             logger=[tensorboard_logger, csv_logger],
-            callbacks=[checkpoint_callback],
+            callbacks=callbacks,
             log_every_n_steps=10,
         )
 
