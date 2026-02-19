@@ -28,8 +28,10 @@ Usage:
 """
 
 import os
+import sys
 import json
 import shutil
+import shlex
 import argparse
 from pathlib import Path
 from typing import Dict, Tuple, List, Optional
@@ -983,6 +985,13 @@ def main():
         help='Number of batches to accumulate gradients before an optimizer step (PyTorch Lightning Trainer option). Use with smaller batch size to keep effective batch size (e.g. batch_size=4 and accumulate_grad_batches=4 -> effective batch 16). Default: 1 (no accumulation).',
     )
 
+    parser.add_argument(
+        '--ckpt-path',
+        type=str,
+        default=None,
+        help='Path to checkpoint to resume training (e.g. .../checkpoints/last.ckpt). Use a new --exp-name for the resumed run so logs and checkpoints go to a separate experiment directory.',
+    )
+
     args = parser.parse_args()
     print(f"Using args: {args}")
 
@@ -1035,6 +1044,12 @@ def main():
                 else:
                     print("Note: No validation (--val-dir has no .npy files and --val-split is 0).")
 
+        ckpt_path_resolved: Optional[Path] = None
+        if args.ckpt_path is not None:
+            ckpt_path_resolved = Path(args.ckpt_path).expanduser().resolve()
+            if not ckpt_path_resolved.exists():
+                raise SystemExit(f"Error: checkpoint not found: {ckpt_path_resolved}")
+
         print("=" * 60)
         print("Starting Training")
         print("=" * 60)
@@ -1051,6 +1066,8 @@ def main():
             + (str(Path(args.class_weights).expanduser().resolve()) if args.class_weights else "default (built-in)")
         )
         print(f"Experiment name: {args.exp_name}")
+        if args.ckpt_path is not None and ckpt_path_resolved is not None:
+            print(f"Resuming from checkpoint: {ckpt_path_resolved}")
         if args.early_stopping:
             print(f"Early stopping: patience={args.early_stopping_patience} ({effective_monitor}).")
         if args.accumulate_grad_batches > 1:
@@ -1106,6 +1123,12 @@ def main():
             weights_used = model.class_weights.cpu().tolist()
             with open(class_weights_dest, "w") as f:
                 json.dump({"weights": weights_used, "source": "built-in default"}, f, indent=2)
+
+        # Save full run config and command line for reproducibility
+        with open(log_dir / "train_config.json", "w") as f:
+            json.dump(vars(args), f, indent=2)
+        with open(log_dir / "run_command.txt", "w") as f:
+            f.write(sys.executable + " " + " ".join(shlex.quote(a) for a in sys.argv) + "\n")
 
         # Setup checkpoint callback (use train_loss when no validation data)
         if has_validation:
@@ -1168,7 +1191,8 @@ def main():
             save_network_graph(model, tensorboard_logger.log_dir)
 
         # Train model
-        trainer.fit(model, data_module)
+        ckpt_path = str(ckpt_path_resolved) if ckpt_path_resolved is not None else None
+        trainer.fit(model, data_module, ckpt_path=ckpt_path)
 
         print("\n" + "=" * 60)
         print("Training complete!")
