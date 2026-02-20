@@ -11,6 +11,7 @@ A comprehensive pipeline for processing bridge lidar data organized by Hydrologi
 - [Data Download](#data-download)
 - [Classification Labels for Training](#classification-labels-for-training)
 - [Output Structure](#output-structure)
+- [Notebooks](#notebooks)
 - [Visualizing training metrics](#visualizing-training-metrics)
 
 ## Project Overview
@@ -143,9 +144,9 @@ bridge-classifier python src/train.py \
   --accumulate-grad-batches 1 \
   --exp-name bridge-base-all-data-v0 \
   --class-weights /data/ml-data/class_weights.json \
-  --num-workers 12 \
+  --num-workers 10 \
   --early-stopping \
-  --early-stopping-patience 6 \
+  --early-stopping-patience 12 \
   --max-voxels 100000
 ```
 
@@ -359,6 +360,16 @@ data/ml-data/
 ├── class_weights.json         # Step 3a (optional): from calculate_weights
 └── holdout_test.txt           # Optional: fixed test IDs for split_data
 ```
+
+### Notebooks
+
+The **notebooks/** folder contains reproducible Jupyter notebooks:
+
+- **`notebooks/dataset_overview.ipynb`** — Downloads ml-data artifacts from S3 (split ID files, `class_weights.json`, optional `osm_bridge_counts.json`), computes unique HUCs in the split, train/val/test line counts, total points from class weights, and OSM bridge counts (when the counts file is on S3). Produces a **class distribution** horizontal bar chart and, if `SILVER_NORMALIZED_DIR` is set to a local path, a **per-bridge point count histogram**. Downloads HUC8 boundaries from S3 and produces a map of which HUC8s appear in the dataset split.
+
+- **`notebooks/training_plots.ipynb`** — Plots training curves from experiment metrics (compare/merge runs, optional best-epoch annotation). Configure `EXPERIMENTS_ROOT`, `EXPERIMENT_NAMES`, and `ANNOTATE_BEST_METRIC` in the notebook. Can be extended later with validation/test metrics, confusion matrix, etc.
+
+Run the dataset overview notebook after configuring the S3 bucket/prefix (and optional AWS profile) in the Config cell or via environment variables (`BRIDGE_S3_BUCKET`, `BRIDGE_S3_ML_PREFIX`, `AWS_PROFILE`). HUC8 boundaries are read from S3 (`BRIDGE_S3_HUC8_KEY`); see the notebook for details.
 
 ### File Naming Conventions
 
