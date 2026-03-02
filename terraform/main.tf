@@ -42,7 +42,7 @@ resource "aws_cloudwatch_log_group" "batch" {
 resource "aws_ecr_repository" "inference" {
   name                 = var.project_name
   image_tag_mutability = "MUTABLE"
-  force_delete         = true
+  force_delete         = false
 
   image_scanning_configuration {
     scan_on_push = false
@@ -104,6 +104,10 @@ resource "aws_batch_job_definition" "inference" {
   name           = "${var.project_name}-inference"
   type           = "container"
   propagate_tags = true
+
+  timeout {
+    attempt_duration_seconds = var.job_timeout_seconds
+  }
 
   container_properties = jsonencode({
     image      = "${aws_ecr_repository.inference.repository_url}:latest"
