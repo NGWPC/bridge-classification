@@ -30,11 +30,10 @@ import sys
 from datetime import datetime
 
 import boto3
-from botocore.exceptions import ClientError
 
 # Add project root to path so we can import from src/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from src.s3 import parse_s3_uri, stream_manifest_lines
+from src.s3 import create_s3_client, stream_manifest_lines
 
 MAX_ARRAY_SIZE = 10_000  # AWS Batch hard limit
 DEFAULT_CHUNK_TARGET = 60
@@ -44,7 +43,7 @@ SPOT_PRICE_PER_HOUR = 0.218  # g4dn.xlarge spot estimate - https://instances.van
 def get_terraform_outputs(terraform_dir='terraform'):
     """Read AWS config from terraform outputs."""
     outputs = {}
-    keys = ['aws_region', 'aws_profile', 'job_definition_name', 'job_queue_name']
+    keys = ['aws_region', 'aws_profile', 'job_definition_name', 'job_queue_name', 's3_manifest_uri']
 
     if not os.path.isdir(terraform_dir):
         return outputs
@@ -70,21 +69,13 @@ def count_manifest_lines(s3_client, manifest_uri):
 
 def validate_manifest(s3_client, manifest_uri):
     """Check manifest for common issues. Returns (line_count, issues)."""
-    bucket, key = parse_s3_uri(manifest_uri)
-    response = s3_client.get_object(Bucket=bucket, Key=key)
-
-    lines = []
+    lines = list(stream_manifest_lines(s3_client, manifest_uri))
     issues = []
-    for i, raw_line in enumerate(response['Body'].iter_lines(), 1):
-        line = raw_line.decode('utf-8').strip() if isinstance(raw_line, bytes) else raw_line.strip()
-        if not line:
-            issues.append(f"Line {i}: empty")
-            continue
+
+    for i, line in enumerate(lines, 1):
         if '/' not in line:
             issues.append(f"Line {i}: no '/' separator (expected huc_id/bridge_stem): {line[:80]}")
-        lines.append(line)
 
-    # Check duplicates
     seen = {}
     for i, line in enumerate(lines, 1):
         if line in seen:
@@ -147,14 +138,18 @@ def main():
         print("Run 'cd terraform && terraform init && terraform apply' or set env vars.")
         sys.exit(1)
 
+    # Fall back to s3_manifest_uri from terraform outputs when --manifest not provided
+    manifest = args.manifest or tf.get('s3_manifest_uri')
+    if manifest and not args.manifest:
+        print(f"Using manifest from terraform output: {manifest}")
+
     s3_profile = args.profile or os.environ.get('S3_PROFILE') or aws_profile
-    session = boto3.Session(profile_name=s3_profile)
-    s3 = session.client('s3')
+    s3 = create_s3_client(s3_profile)
 
     # --- Validate manifest ---
-    if args.validate and args.manifest:
-        print(f"Validating manifest: {args.manifest}")
-        line_count, issues = validate_manifest(s3, args.manifest)
+    if args.validate and manifest:
+        print(f"Validating manifest: {manifest}")
+        line_count, issues = validate_manifest(s3, manifest)
         print(f"Lines: {line_count}")
         if issues:
             print(f"\nFound {len(issues)} issue(s):")
@@ -176,16 +171,16 @@ def main():
         total_files = args.total
         array_size = compute_array_size(total_files, args.chunk_target)
         print(f"Total files (provided): {total_files}")
-    elif args.manifest:
-        print(f"Counting lines from S3: {args.manifest}")
-        total_files = count_manifest_lines(s3, args.manifest)
+    elif manifest:
+        print(f"Counting lines from S3: {manifest}")
+        total_files = count_manifest_lines(s3, manifest)
         if total_files == 0:
             print("ERROR: manifest is empty")
             sys.exit(1)
         array_size = compute_array_size(total_files, args.chunk_target)
         print(f"Total files in manifest: {total_files}")
     else:
-        parser.error("Provide --manifest, --total, or --single")
+        parser.error("Provide --manifest, --total, or --single (or set s3_manifest_uri in terraform.tfvars)")
         return
 
     actual_chunk = math.ceil(total_files / array_size) if array_size > 0 else total_files
@@ -198,8 +193,8 @@ def main():
 
     # --- Parse env overrides ---
     env_overrides = {}
-    if args.manifest:
-        env_overrides['S3_MANIFEST_URI'] = args.manifest
+    if manifest:
+        env_overrides['S3_MANIFEST_URI'] = manifest
     for item in args.env:
         if '=' not in item:
             print(f"ERROR: --env value must be KEY=VALUE, got: {item}")

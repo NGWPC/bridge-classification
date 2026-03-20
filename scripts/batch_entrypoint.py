@@ -23,19 +23,16 @@ import sys
 import time
 from pathlib import Path, PurePosixPath
 
-import boto3
 import torch
-from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError
-
-AWS_MAX_RETRIES = 3
 
 # Add project root to path so we can import from src/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from src.inference import BridgeTimeout, _timeout_handler, load_model, run_inference
+from src.constants import BridgeTimeout, MIN_POINT_COUNT, _timeout_handler
+from src.inference import load_model, run_inference
 from src.s3 import (
-    download_file, object_exists, parse_s3_uri, resolve_input_key,
-    resolve_output_keys, upload_file,
+    create_s3_client, download_file, object_exists, parse_s3_uri,
+    resolve_input_key, resolve_output_keys, upload_file,
 )
 
 
@@ -96,9 +93,7 @@ def main():
     cfg = parse_config()
     idx = cfg['job_index']
 
-    s3 = boto3.client('s3', config=BotoConfig(
-        retries={'max_attempts': AWS_MAX_RETRIES, 'mode': 'adaptive'}
-    ))
+    s3 = create_s3_client()
 
     # --- SIGTERM handler for SPOT interruptions ---
     shutdown_requested = False
@@ -155,7 +150,8 @@ def main():
     bucket = cfg['s3_bucket']
     succeeded = 0
     failed = 0
-    skipped = 0
+    skipped_exists = 0
+    skipped_too_few_points = 0
     download_failed = 0
 
     old_alarm_handler = signal.signal(signal.SIGALRM, _timeout_handler)
@@ -196,7 +192,7 @@ def main():
             if all_exist:
                 log(f"SKIP_EXISTS ({i}/{chunk_size}) manifest_line={global_line} huc={huc_id}",
                     child_index=idx, bridge_id=bridge_id)
-                skipped += 1
+                skipped_exists += 1
                 continue
 
             # 4c. Download input
@@ -210,16 +206,8 @@ def main():
                 download_failed += 1
                 continue
 
-            # 4d. Prepare local output path
-            input_p = PurePosixPath(input_key)
-            ext = input_p.suffix
-            stem = input_p.stem
-
-            if mode == 'masked':
-                output_name = f"{stem}_bridge_masked{ext}"
-            else:
-                output_name = f"{stem}_predicted{ext}"
-
+            # 4d. Prepare local output path (derived from resolve_output_keys)
+            output_name = PurePosixPath(output_keys['primary']).name
             local_output_dir = output_dir / huc_id
             local_output_dir.mkdir(parents=True, exist_ok=True)
             local_output = str(local_output_dir / output_name)
@@ -232,14 +220,21 @@ def main():
                 ok = run_inference(model, local_input, local_output, voxel_size=0.1,
                                    device=device, mode=mode)
             except BridgeTimeout:
-                log(f"TIMEOUT bridge_timeout={bridge_timeout}s huc={huc_id}",
+                log(f"INFER_FAILED reason=timeout bridge_timeout={bridge_timeout}s huc={huc_id} manifest_line={global_line}",
                     child_index=idx, bridge_id=bridge_id)
                 ok = False
             finally:
                 signal.setitimer(signal.ITIMER_REAL, 0)  # cancel alarm before upload
 
+            if ok == 'skipped':
+                log(f"SKIP_SMALL_FILE points<{MIN_POINT_COUNT} huc={huc_id} manifest_line={global_line}",
+                    child_index=idx, bridge_id=bridge_id)
+                skipped_too_few_points += 1
+                cleanup(local_input, local_output)
+                continue
+
             if not ok:
-                log(f"INFER_FAILED huc={huc_id} manifest_line={global_line}",
+                log(f"INFER_FAILED reason=inference_error huc={huc_id} manifest_line={global_line}",
                     child_index=idx, bridge_id=bridge_id)
                 failed += 1
                 cleanup(local_input, local_output)
@@ -253,8 +248,8 @@ def main():
 
                 # mode=both: also upload the masked file that run_inference wrote
                 if mode == 'both' and 'masked' in output_keys:
-                    masked_local = str(Path(local_output).with_name(
-                        f"{stem}_bridge_masked{ext}"))
+                    masked_name = PurePosixPath(output_keys['masked']).name
+                    masked_local = str(local_output_dir / masked_name)
                     if os.path.isfile(masked_local):
                         upload_file(s3, masked_local, bucket, output_keys['masked'])
                         log(f"UPLOADED s3://{bucket}/{output_keys['masked']}",
@@ -282,8 +277,8 @@ def main():
     # --- 5. Summary ---
     job_seconds = time.time() - job_start
     job_hours = job_seconds / 3600
-    log(f"SUMMARY succeeded={succeeded} failed={failed} skipped={skipped} "
-        f"download_failed={download_failed} total={chunk_size} "
+    log(f"SUMMARY succeeded={succeeded} failed={failed} skipped_exists={skipped_exists} "
+        f"skipped_too_few_points={skipped_too_few_points} download_failed={download_failed} total={chunk_size} "
         f"wall_clock_seconds={job_seconds:.0f} wall_clock_hours={job_hours:.4f}",
         child_index=idx)
 

@@ -37,53 +37,27 @@ Usage (batch via pairs file):
 """
 
 import argparse
-import json
 import os
 import signal
 import sys
 from pathlib import Path
 
+# Ensure project root is on sys.path before src.* imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
 import numpy as np
-import pdal
 import torch
 
+from src.constants import (
+    BRIDGE_DECK_ASPRS_CODE, BRIDGE_DECK_MODEL_CLASS, MIN_POINT_COUNT,
+    MODEL_TO_LAS_MAP, OBSTACLES_ASPRS_CODE, OBSTACLES_MODEL_CLASS,
+    SPATIAL_SHAPE_PADDING, BridgeTimeout, _timeout_handler,
+)
+from src.las_io import read_las, write_las, normalize_intensity
+from src.voxelization import voxelize
 
-class BridgeTimeout(BaseException):
-    """Raised when a single bridge exceeds the per-bridge wall-clock timeout."""
-    pass
-
-
-def _timeout_handler(signum, frame):
-    raise BridgeTimeout()
-
-# Ensure we can import the model structure
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-try:
-    import spconv.pytorch as spconv
-    from src.model import SparseUNet
-except ImportError:
-    # Fallback if running directly from src
-    from model import SparseUNet
-    import spconv.pytorch as spconv
-
-
-# --- CONFIGURATION ---
-MIN_POINT_COUNT = 100          # Files with fewer points are skipped
-SPATIAL_SHAPE_PADDING = 10     # Extra voxel buffer added to spconv spatial shape to avoid
-                               # out-of-bounds during strided/transposed conv operations
-
-# Model class -> ASPRS LAS code mappings
-BRIDGE_DECK_MODEL_CLASS = 2
-BRIDGE_DECK_ASPRS_CODE = 17
-OBSTACLES_MODEL_CLASS = 3
-OBSTACLES_ASPRS_CODE = 18
-
-MODEL_TO_LAS_MAP = {
-    0: 1,                          # Background  -> Unclassified
-    1: 2,                          # Ground/Water -> Ground
-    BRIDGE_DECK_MODEL_CLASS: BRIDGE_DECK_ASPRS_CODE,   # Bridge Deck -> Bridge Deck
-    OBSTACLES_MODEL_CLASS: OBSTACLES_ASPRS_CODE,       # Obstacles   -> High Noise
-}
+import spconv.pytorch as spconv
+from src.model import SparseUNet
 
 def apply_bridge_mask(original_classification, point_labels_model):
     """Apply binary bridge deck mask: only reclassify model class 2 -> ASPRS 17.
@@ -104,55 +78,18 @@ def apply_bridge_mask(original_classification, point_labels_model):
 
 def load_las(filepath):
     """Read LAS file and return XYZ + Intensity."""
-    pipeline_json = {
-        "pipeline": [
-            {
-                "type": "readers.las",
-                "filename": str(filepath)
-            }
-        ]
-    }
-    pipeline = pdal.Pipeline(json.dumps(pipeline_json))
-    pipeline.execute()
-    arrays = pipeline.arrays[0]
+    arrays, metadata = read_las(filepath)
 
-    # Extract data
-    X = arrays['X']
-    Y = arrays['Y']
-    Z = arrays['Z']
-    Intensity = arrays['Intensity']
+    points = np.stack([arrays['X'], arrays['Y'], arrays['Z']], axis=1).astype(np.float32)
+    intensities = normalize_intensity(arrays['Intensity'].astype(np.float32))
 
-    # Stack (N, 3)
-    points = np.stack([X, Y, Z], axis=1).astype(np.float32)
-    intensities = Intensity.astype(np.float32)
-
-    # Normalize Intensity (0-1) like in training
-    if intensities.max() > 0:
-        intensities /= intensities.max()
-
-    return points, intensities, pipeline.metadata, arrays
+    return points, intensities, metadata, arrays
 
 
 def save_las(output_path, original_arrays, labels, metadata):
     """Save the classified point cloud."""
-    # Ensure labels are uint8
-    classification = labels.astype(np.uint8)
-
-    # Update classification in the original array to preserve all other fields (GPS, etc.)
-    original_arrays['Classification'] = classification
-
-    writer_stage = {
-        "type": "writers.las",
-        "filename": str(output_path),
-        "extra_dims": "all",
-        "a_srs": "EPSG:3857",
-        "forward": "all",
-    }
-
-    # Execute writer pipeline
-    pipeline_json = json.dumps({"pipeline": [writer_stage]})
-    pipeline = pdal.Pipeline(pipeline_json, arrays=[original_arrays])
-    pipeline.execute()
+    original_arrays['Classification'] = labels.astype(np.uint8)
+    write_las(output_path, original_arrays)
 
 
 def load_model(checkpoint_path, device):
@@ -206,7 +143,8 @@ def run_inference(model, input_path, output_path, voxel_size=0.1, device=torch.d
               or 'both' (save raw to output_path and masked alongside it).
 
     Returns:
-        True if inference succeeded, False if the file was skipped or failed.
+        True if inference succeeded, False if the file failed,
+        or 'skipped' if the file was intentionally skipped (e.g. too few points).
     """
     try:
         # 1. LOAD DATA
@@ -214,32 +152,18 @@ def run_inference(model, input_path, output_path, voxel_size=0.1, device=torch.d
         raw_xyz, raw_intensity, meta, original_arrays = load_las(input_path)
 
         if len(raw_xyz) < MIN_POINT_COUNT:
-            print(f"WARN: {input_path} has < 100 points, skipping.")
-            return False
+            print(f"SKIP: {input_path} has {len(raw_xyz)} points (< {MIN_POINT_COUNT}), skipping.")
+            return 'skipped'
 
         # 2. PREPROCESS (Normalize & Voxelize)
-        # Shift to local coordinates (min=0) to match training distribution
         xyz_min = raw_xyz.min(axis=0)
         xyz_centered = raw_xyz - xyz_min
 
-        # Quantize
-        discrete_coords = np.floor(xyz_centered / voxel_size).astype(np.int32)
-
-        # Unique Voxel Logic
-        # unique_coords: The voxels fed to the network (M, 3)
-        # unique_inverse_indices: Mapping from Original Points (N) -> Voxel Index (M)
-        unique_coords, unique_inverse_indices = np.unique(discrete_coords, axis=0, return_inverse=True)
-
-        # Feature Aggregation (Mean Intensity per Voxel)
-        print("Aggregating features...")
-        flat_intensity = raw_intensity.ravel()
-
-        # Sum of intensity per voxel index
-        sum_features = np.bincount(unique_inverse_indices, weights=flat_intensity)
-        count_features = np.bincount(unique_inverse_indices)
-
-        # Mean intensity per voxel
-        voxel_features = (sum_features / count_features).reshape(-1, 1)
+        print("Voxelizing...")
+        vox = voxelize(xyz_centered, voxel_size, raw_intensity)
+        unique_coords = vox.unique_coords
+        unique_inverse_indices = vox.inverse_map
+        voxel_features = vox.voxel_features
 
         print(f"Voxelization: {len(raw_xyz)} points -> {len(unique_coords)} voxels")
 
@@ -350,10 +274,11 @@ def run_batch_inference(model, pairs, voxel_size=0.1, device=torch.device("cuda"
         mode: Output mode passed to run_inference. Default: 'masked'.
 
     Returns:
-        Tuple of (succeeded_count, failed_count).
+        Tuple of (succeeded_count, failed_count, skipped_count).
     """
     succeeded = 0
     failed = 0
+    skipped = 0
     total = len(pairs)
     old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
     try:
@@ -368,14 +293,16 @@ def run_batch_inference(model, pairs, voxel_size=0.1, device=torch.device("cuda"
                 ok = False
             finally:
                 signal.setitimer(signal.ITIMER_REAL, 0)  # cancel timer whether success, failure, or timeout
-            if ok:
+            if ok == 'skipped':
+                skipped += 1
+            elif ok:
                 succeeded += 1
             else:
                 failed += 1
     finally:
         signal.signal(signal.SIGALRM, old_handler)  # always restore original handler
-    print(f"\nBatch complete: {succeeded} succeeded, {failed} failed out of {total}")
-    return succeeded, failed
+    print(f"\nBatch complete: {succeeded} succeeded, {failed} failed, {skipped} skipped out of {total}")
+    return succeeded, failed, skipped
 
 
 def main():
@@ -413,12 +340,12 @@ def main():
     # Dispatch
     if args.pairs_file:
         pairs = parse_pairs_file(args.pairs_file)
-        succeeded, failed = run_batch_inference(model, pairs, args.voxel_size, device, args.bridge_timeout, mode=args.mode)
+        succeeded, failed, skipped = run_batch_inference(model, pairs, args.voxel_size, device, args.bridge_timeout, mode=args.mode)
         if failed > 0:
             sys.exit(1)
     else:
         ok = run_inference(model, args.input, args.output, args.voxel_size, device, mode=args.mode)
-        if not ok:
+        if ok == False:
             sys.exit(1)
 
 if __name__ == "__main__":

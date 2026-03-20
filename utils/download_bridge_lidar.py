@@ -5,12 +5,12 @@ Reads bridge geometries from GeoPackage files, finds intersecting USGS
 Entwine lidar sources, downloads the raw point cloud within a buffered
 bridge polygon, and saves as LAZ files organized by HUC.
 
-This is a lightweight alternative to src/download-and-weak-supervise-hucs.py
+This is a lightweight alternative to src/download_and_weak_supervise_hucs.py
 for bridges that only need raw lidar (e.g. for inference on not-lidar bridges).
 
 Output is **source** LAZ only: unclassified point clouds (buffer + EPT crop +
 write). This script does not run RANSAC, SMRF, or weak-supervision labeling,
-so there is no silver (classified) output. Use src/download-and-weak-supervise-hucs.py
+so there is no silver (classified) output. Use src/download_and_weak_supervise_hucs.py
 when you need both source and silver for training. Use this script when you only
 need raw lidar (e.g. for inference on not-lidar bridges or for OWP comparison).
 
@@ -38,12 +38,15 @@ import argparse
 import json
 import logging
 import multiprocessing
+import os
 import random
 import sys
 import warnings
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from src.logging_utils import setup_logging
 
 import geopandas as gpd
 import pdal
@@ -60,46 +63,9 @@ warnings.filterwarnings('ignore')
 logger: Optional[logging.Logger] = None
 
 
-def setup_logging(log_dir: str = './logs') -> logging.Logger:
-    """Set up logging to both file and console."""
-    global logger
-
-    log_dir_path = Path(log_dir)
-    log_dir_path.mkdir(parents=True, exist_ok=True)
-
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    log_file = log_dir_path / f'download_bridge_lidar_{timestamp}.log'
-
-    logger = logging.getLogger('download_bridge_lidar')
-    logger.setLevel(logging.INFO)
-
-    # Remove existing handlers
-    for handler in logger.handlers[:]:
-        handler.close()
-        logger.removeHandler(handler)
-
-    file_formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    console_formatter = logging.Formatter('%(levelname)s - %(message)s')
-
-    file_handler = logging.FileHandler(str(log_file), mode='w')
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(file_formatter)
-    logger.addHandler(file_handler)
-
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.WARNING)
-    console_handler.setFormatter(console_formatter)
-    logger.addHandler(console_handler)
-
-    logger.info(f"Logging initialized. Log file: {log_file}")
-    print(f"Log file: {log_file}")
-    return logger
 
 
-# --- PDAL defaults (same as BridgeProcessingConfig in download-and-weak-supervise-hucs.py) ---
+# --- PDAL defaults (same as BridgeProcessingConfig in download_and_weak_supervise_hucs.py) ---
 EPT_REQUESTS = 3
 EPT_RESOLUTION = 0.1
 WRITER_SRS = "EPSG:3857"
@@ -339,8 +305,8 @@ def main() -> None:
                         help='Directory for log files (default: ./logs)')
     args = parser.parse_args()
 
-    # Set up logging
-    setup_logging(args.log_dir)
+    global logger
+    logger = setup_logging('download_bridge_lidar', args.log_dir)
 
     print(f"Running with args: {args}")
     if logger:

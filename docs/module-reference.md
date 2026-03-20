@@ -6,7 +6,103 @@ Summary of every module's public API and CLI arguments.
 
 ## Source Modules (`src/`)
 
-### `src/download-and-weak-supervise-hucs.py`
+### `src/constants.py`
+
+Shared constants and lightweight utilities. Zero heavy dependencies (no torch, spconv, pdal, numpy) so it can be imported anywhere, including environments without a GPU.
+
+**Constants:**
+
+
+| Constant                  | Value / Type | Description                                                    |
+| ------------------------- | ------------ | -------------------------------------------------------------- |
+| `NUM_CLASSES`             | `4`          | Number of model output classes                                 |
+| `CLASS_NAMES`             | dict         | `{0: "Background", 1: "Ground/Water", 2: "Bridge Deck", 3: "Obstacles"}` |
+| `CLASS_COLORS`            | dict         | Matplotlib colors per class                                    |
+| `BRIDGE_DECK_MODEL_CLASS` | `2`          | Model class for bridge deck                                    |
+| `BRIDGE_DECK_ASPRS_CODE`  | `17`         | ASPRS code for bridge deck                                     |
+| `OBSTACLES_MODEL_CLASS`   | `3`          | Model class for obstacles                                      |
+| `OBSTACLES_ASPRS_CODE`    | `18`         | ASPRS code for obstacles                                       |
+| `MODEL_TO_LAS_MAP`        | dict         | `{0: 1, 1: 2, 2: 17, 3: 18}` — model class to ASPRS output code |
+| `LAS_TO_MODEL_MAP`        | dict         | `{2: 1, 9: 1, 17: 2, 18: 3}` — ASPRS code to model class     |
+| `VOXEL_SIZE`              | `0.1`        | Default voxel size in meters                                   |
+| `SPATIAL_SHAPE_PADDING`   | `10`         | Padding added to voxel grid spatial shape                      |
+| `MIN_POINT_COUNT`         | `100`        | Skip files with fewer points                                   |
+| `BRIDGE_TIMEOUT`          | `150`        | Default per-bridge timeout in seconds                          |
+| `AWS_MAX_RETRIES`         | `3`          | Max S3 retry attempts (adaptive mode)                          |
+
+
+**Classes / Functions:**
+
+
+| Name                     | Description                                                                |
+| ------------------------ | -------------------------------------------------------------------------- |
+| `BridgeTimeout`          | Exception raised when a bridge exceeds the per-bridge wall-clock timeout   |
+| `_timeout_handler(signum, frame)` | SIGALRM handler that raises `BridgeTimeout`                       |
+
+
+No CLI. Imported by `inference.py`, `train.py`, `preprocess_bridges.py`, `evaluate_model.py`, `batch_entrypoint.py`, `s3.py`.
+
+---
+
+### `src/las_io.py`
+
+Shared PDAL LAS/LAZ file I/O helpers. Used by inference, preprocessing, and evaluation modules to avoid duplicating PDAL pipeline boilerplate.
+
+**Functions:**
+
+
+| Function                          | Description                                                                |
+| --------------------------------- | -------------------------------------------------------------------------- |
+| `read_las(filepath)`              | Read a LAS/LAZ file via PDAL. Returns `(arrays, metadata)`.               |
+| `write_las(output_path, arrays, srs="EPSG:3857")` | Write a LAS/LAZ file via PDAL with standard options (extra_dims=all, forward=all). |
+| `normalize_intensity(intensity)`  | Normalize intensity values to 0-1 range. Returns unchanged if max is 0.   |
+
+
+No CLI. Imported by `inference.py`, `preprocess_bridges.py`, `evaluate_model.py`.
+
+---
+
+### `src/logging_utils.py`
+
+Shared logging configuration for long-running data scripts. Provides file + console logging setup.
+
+**Functions:**
+
+
+| Function                                    | Description                                                                                       |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `setup_logging(name, log_dir='./logs')`     | Set up logging to both file (INFO+) and console (WARNING+). Returns configured logger instance.   |
+
+
+No CLI. Imported by `download_and_weak_supervise_hucs.py`, `download_bridge_lidar.py`.
+
+---
+
+### `src/voxelization.py`
+
+Shared voxelization utilities for training and inference. Converts raw point clouds into discrete voxel grids with aggregated features.
+
+**Classes:**
+
+
+| Class         | Description                                                                                   |
+| ------------- | --------------------------------------------------------------------------------------------- |
+| `VoxelResult` | Dataclass with `unique_coords` (M,3), `voxel_features` (M,1), `inverse_map` (N,), `voxel_labels` (M, optional). |
+
+
+**Functions:**
+
+
+| Function                                             | Description                                                                                           |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `voxelize(xyz, voxel_size, intensity, labels=None)`  | Quantize xyz, deduplicate voxels, compute mean intensity. With labels: majority-vote per voxel.        |
+
+
+No CLI. Imported by `train.py` and `inference.py`.
+
+---
+
+### `src/download_and_weak_supervise_hucs.py`
 
 Full HUC-based pipeline for downloading USGS LiDAR and generating weakly-supervised silver training data. This is the primary data acquisition script.
 
@@ -50,7 +146,7 @@ Full HUC-based pipeline for downloading USGS LiDAR and generating weakly-supervi
 
 ---
 
-### `src/download-and-weak-supervise-demo.py`
+### `src/download_and_weak_supervise_demo.py`
 
 Simplified single-dataset demo for testing the weak supervision algorithm on a small set of known bridge OSM IDs. Configuration is via constants at the top of the file (`LIDAR_DATASET`, `TARGET_OSMIDS`, `BUFFER_METERS`).
 
@@ -71,20 +167,16 @@ No CLI arguments. Edit constants at top of file to configure.
 
 Normalizes LAZ files from `silver_training/` into `.npy` + `.json` pairs for model training.
 
-**Key constants:**
+**Imports from shared modules:**
 
-
-| Constant           | Description                                                              |
-| ------------------ | ------------------------------------------------------------------------ |
-| `LAS_TO_MODEL_MAP` | `{2: 1, 9: 1, 17: 2, 18: 3}` — ASPRS code → model class. All others → 0. |
-
+- `LAS_TO_MODEL_MAP` from `src.constants` — `{2: 1, 9: 1, 17: 2, 18: 3}` (ASPRS code → model class)
+- `read_las`, `normalize_intensity` from `src.las_io`
 
 **Key functions:**
 
 
 | Function                                                | Description                                                                                               |
 | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `normalize_intensity(array)`                            | Divides by `max`; returns 0–1 range.                                                                      |
 | `process_laz_file(filepath, output_dir, skip_existing)` | Processes one LAZ file: read → remap → normalize → save `.npy` + `.json`. Returns `(success, error_msg)`. |
 | `process_huc_folder(huc_dir, output_base_dir, ...)`     | Processes all LAZ files in a HUC folder, with optional multiprocessing.                                   |
 
@@ -180,19 +272,10 @@ Training pipeline with voxelization, data loading, and PyTorch Lightning integra
 
 Loads a trained checkpoint, classifies a raw LAS/LAZ file, and writes a classified output with ASPRS codes. Supports single-file and batch modes, with per-bridge timeout handling.
 
-**Key constants:**
+**Imports from shared modules:**
 
-
-| Constant                  | Description                                                    |
-| ------------------------- | -------------------------------------------------------------- |
-| `MODEL_TO_LAS_MAP`        | `{0: 1, 1: 2, 2: 17, 3: 18}` — model class → ASPRS output code |
-| `MIN_POINT_COUNT`         | `100` — skip files with fewer points                           |
-| `SPATIAL_SHAPE_PADDING`   | `10` — padding added to voxel grid spatial shape               |
-| `BRIDGE_DECK_MODEL_CLASS` | `2` — model class for bridge deck                              |
-| `BRIDGE_DECK_ASPRS_CODE`  | `17` — ASPRS code for bridge deck                              |
-| `OBSTACLES_MODEL_CLASS`   | `3` — model class for obstacles                                |
-| `OBSTACLES_ASPRS_CODE`    | `18` — ASPRS code for obstacles                                |
-
+- `MODEL_TO_LAS_MAP`, `MIN_POINT_COUNT`, `SPATIAL_SHAPE_PADDING`, `BRIDGE_DECK_MODEL_CLASS`, `BRIDGE_DECK_ASPRS_CODE`, `OBSTACLES_MODEL_CLASS`, `OBSTACLES_ASPRS_CODE`, `BridgeTimeout`, `_timeout_handler` from `src.constants`
+- `read_las`, `write_las`, `normalize_intensity` from `src.las_io`
 
 **Key functions:**
 
@@ -202,9 +285,9 @@ Loads a trained checkpoint, classifies a raw LAS/LAZ file, and writes a classifi
 | `load_las(filepath)`                                             | PDAL read → returns `(points, intensities, metadata, original_arrays)` |
 | `save_las(output_path, original_arrays, labels, metadata)`       | Updates `Classification` field, writes via PDAL                        |
 | `load_model(checkpoint_path, device)`                            | Loads SparseUNet from Lightning or raw checkpoint                      |
-| `run_inference(model, input_path, output_path, ...)`             | Classify a single file. Supports `mode` parameter                      |
+| `run_inference(model, input_path, output_path, ...)`             | Classify a single file. Returns `True` (success), `False` (failure), or `'skipped'` (< `MIN_POINT_COUNT` points) |
 | `apply_bridge_mask(original_classification, point_labels_model)` | Bridge deck only mask: model class 2 → ASPRS 17 overlaid on original   |
-| `run_batch_inference(model, pairs, ...)`                         | Process multiple files with per-bridge timeout via SIGALRM             |
+| `run_batch_inference(model, pairs, ...)`                         | Process multiple files with per-bridge timeout via SIGALRM. Returns `(succeeded, failed, skipped)` |
 | `parse_pairs_file(filepath)`                                     | Parse TSV file of input/output path pairs                              |
 
 
@@ -269,6 +352,7 @@ Shared S3 utilities used by all batch scripts. Generic S3 operations and bridge-
 
 | Function                                                            | Description                                                                                    |
 | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `create_s3_client(profile=None)`                                    | Create a boto3 S3 client with adaptive retry (`AWS_MAX_RETRIES` attempts)                      |
 | `parse_s3_uri(uri)`                                                 | Split `s3://bucket/key` into `(bucket, key)` tuple                                             |
 | `object_exists(s3_client, bucket, key)`                             | Check if S3 object exists via `head_object` (returns bool)                                     |
 | `download_file(s3_client, bucket, key, local_path)`                 | Download S3 object, creating parent dirs as needed                                             |
@@ -365,7 +449,7 @@ Plots training curves from PyTorch Lightning CSVLogger output.
 
 ---
 
-### `utils/download-osm-hucs.py`
+### `utils/download_osm_hucs.py`
 
 Downloads OSM bridge GeoPackages by HUC from S3.
 
