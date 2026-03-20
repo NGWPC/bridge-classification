@@ -109,12 +109,25 @@ resource "aws_batch_job_definition" "inference" {
     attempt_duration_seconds = var.job_timeout_seconds
   }
 
+  retry_strategy {
+    attempts = var.retry_attempts
+
+    evaluate_on_exit {
+      action           = "RETRY"
+      on_status_reason = "Host EC2*"
+    }
+    evaluate_on_exit {
+      action    = "EXIT"
+      on_reason = "*"
+    }
+  }
+
   container_properties = jsonencode({
     image      = "${aws_ecr_repository.inference.repository_url}:latest"
     vcpus      = var.job_vcpus
     memory     = var.job_memory
     jobRoleArn = var.batch_job_role_arn
-    command    = ["/app/batch_entrypoint.sh"]
+    command    = ["python", "/app/scripts/batch_entrypoint.py"]
 
     resourceRequirements = [
       {
@@ -137,12 +150,13 @@ resource "aws_batch_job_definition" "inference" {
     }
 
     environment = [
-      { name = "USE_GPU", value = "true" },
       { name = "S3_BUCKET", value = var.s3_bucket },
       { name = "S3_INPUT_PREFIX", value = var.s3_input_prefix },
       { name = "S3_MANIFEST_URI", value = var.s3_manifest_uri },
       { name = "S3_MODEL_URI", value = var.s3_model_uri },
       { name = "S3_OUTPUT_PREFIX", value = var.s3_output_prefix },
+      { name = "INFERENCE_MODE", value = var.inference_mode },
+      { name = "BRIDGE_TIMEOUT", value = tostring(var.bridge_timeout) },
     ]
   })
 
