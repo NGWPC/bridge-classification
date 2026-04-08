@@ -31,6 +31,7 @@ except ImportError:
     HAS_TQDM = False
     print("Warning: tqdm not available. Progress bars disabled.")
 
+
 def process_laz_file(filepath: Path, output_dir: Path, skip_existing: bool = False) -> Tuple[bool, Optional[str]]:
     """
     Process a single LAZ file with normalization and class remapping.
@@ -179,7 +180,7 @@ def process_huc_folder(huc_dir: Path, output_base_dir: Path, skip_existing: bool
     output_huc_dir = output_base_dir / huc_id
 
     # Find all .laz files
-    laz_files = list(huc_dir.glob("*.laz"))
+    laz_files = list(huc_dir.glob("*.laz")) + list(huc_dir.glob("*.las"))
 
     if not laz_files:
         return {
