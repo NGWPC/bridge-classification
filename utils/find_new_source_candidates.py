@@ -80,6 +80,7 @@ from src.lidar_utils import (
     load_lidar_index, find_intersecting_sources, safe_source_name,
     bridge_stem as make_bridge_stem, stratified_sample, EPSG, DEFAULT_BUFFER,
 )
+from src.gpkg_utils import read_bridge_gpkg, iter_huc_gpkgs, DEFAULT_GPKG_TEMPLATE
 
 try:
     from tqdm import tqdm
@@ -146,39 +147,21 @@ def find_candidates(
 ) -> List[Dict[str, Any]]:
     """Scan HUC bridge inventories for bridge+source pairs not in any split."""
     candidates = []
-    huc_dirs = sorted(p for p in hucs_dir.iterdir() if p.is_dir())
+    huc_gpkg_list = list(iter_huc_gpkgs(hucs_dir, DEFAULT_GPKG_TEMPLATE, huc_ids))
 
-    if huc_ids:
-        huc_ids_set = set(huc_ids)
-        huc_dirs = [d for d in huc_dirs if d.name in huc_ids_set]
-
-    iterator = huc_dirs
+    iterator = huc_gpkg_list
     if show_progress and HAS_TQDM:
-        iterator = tqdm(huc_dirs, desc="Scanning HUCs", unit="huc")
+        iterator = tqdm(huc_gpkg_list, desc="Scanning HUCs", unit="huc")
 
-    skipped_no_gpkg = 0
     total_bridges = 0
     total_sources_checked = 0
 
-    for huc_dir in iterator:
-        huc_id = huc_dir.name
-
-        gpkg_path = huc_dir / f"osm_bridges_lidar_subset__{huc_id}.gpkg"
-        if not gpkg_path.exists():
-            skipped_no_gpkg += 1
-            continue
-
+    for huc_id, gpkg_path in iterator:
         try:
-            gdf = gpd.read_file(str(gpkg_path))
-        except Exception as e:
+            gdf = read_bridge_gpkg(gpkg_path, required_cols=("osmid",), target_epsg=EPSG)
+        except (ValueError, Exception) as e:
             print(f"  Warning: failed to read {gpkg_path}: {e}")
             continue
-
-        if 'osmid' not in gdf.columns:
-            continue
-
-        gdf = gdf.to_crs(epsg=EPSG)
-        gdf['osmid'] = gdf['osmid'].astype(str)
 
         for _, row in gdf.iterrows():
             total_bridges += 1
@@ -210,8 +193,7 @@ def find_candidates(
                 })
 
     print(f"\nScan complete:")
-    print(f"  HUCs scanned: {len(huc_dirs) - skipped_no_gpkg}")
-    print(f"  HUCs skipped (no gpkg): {skipped_no_gpkg}")
+    print(f"  HUCs scanned: {len(huc_gpkg_list)}")
     print(f"  Bridges checked: {total_bridges}")
     print(f"  Bridge+source pairs checked: {total_sources_checked}")
     print(f"  New candidates found: {len(candidates)}")

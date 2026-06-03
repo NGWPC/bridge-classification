@@ -52,8 +52,8 @@ from src.lidar_utils import (
     EPSG, DEFAULT_BUFFER,
 )
 
-import geopandas as gpd
 import pdal
+from src.gpkg_utils import read_bridge_gpkg, filter_by_ids, iter_huc_gpkgs
 
 try:
     from tqdm import tqdm
@@ -182,27 +182,15 @@ def generate_tasks(
     tasks: List[tuple] = []
     no_source_count = 0
     total_bridges = 0
-    huc_dirs = sorted(p for p in hucs_dir.iterdir() if p.is_dir())
 
-    for huc_dir in huc_dirs:
-        huc_id = huc_dir.name
-        if huc_ids and huc_id not in huc_ids:
+    for huc_id, gpkg_path in iter_huc_gpkgs(hucs_dir, gpkg_pattern, huc_ids):
+        try:
+            gdf = read_bridge_gpkg(gpkg_path, required_cols=("osmid",), target_epsg=EPSG)
+        except ValueError:
             continue
-
-        gpkg_name = gpkg_pattern.replace("{huc_id}", huc_id)
-        gpkg_path = huc_dir / gpkg_name
-        if not gpkg_path.exists():
-            continue
-
-        gdf = gpd.read_file(str(gpkg_path))
-        gdf = gdf.to_crs(epsg=EPSG)
-        if 'osmid' not in gdf.columns:
-            continue
-        gdf['osmid'] = gdf['osmid'].astype(str)
 
         if osm_ids:
-            osm_ids_str = [str(x) for x in osm_ids]
-            gdf = gdf[gdf['osmid'].isin(osm_ids_str)]
+            gdf = filter_by_ids(gdf, "osmid", osm_ids)
 
         for _, row in gdf.iterrows():
             total_bridges += 1
