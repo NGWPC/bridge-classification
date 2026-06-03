@@ -132,6 +132,30 @@ No CLI. Imported by `download_and_weak_supervise_hucs.py`, `find_new_source_cand
 
 ---
 
+### `src/gpkg_utils.py`
+
+Shared GeoPackage I/O utilities for bridge data. Consolidates the read/validate/reproject pattern used across 6+ scripts into reusable functions.
+
+**Constants:**
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `DEFAULT_GPKG_TEMPLATE` | `osm_bridges_lidar_subset__{huc_id}.gpkg` | Default filename template for per-HUC GeoPackages |
+
+**Functions:**
+
+| Function | Description |
+|----------|-------------|
+| `read_bridge_gpkg(path, required_cols=("osmid",), target_epsg=3857)` | Read GPKG, validate required columns, reproject, cast osmid to str |
+| `write_gpkg(gdf, path)` | Write GeoDataFrame to GPKG, creating parent directories |
+| `split_gpkg_by_column(gdf, column, output_dir, filename_template, verbose)` | Split GeoDataFrame into per-value GPKG files in subdirectories |
+| `iter_huc_gpkgs(hucs_dir, filename_template, huc_ids)` | Yield `(huc_id, gpkg_path)` for each HUC directory with a matching GPKG |
+| `filter_by_ids(gdf, column, ids)` | Filter GeoDataFrame by ID list with automatic str casting |
+
+No CLI. Imported by `prepare_run.py`. Designed to be adopted by `download_and_weak_supervise_hucs.py`, `download_bridge_lidar.py`, `find_new_source_candidates.py`, and other GPKG-consuming scripts.
+
+---
+
 ### `src/download_and_weak_supervise_hucs.py`
 
 Full HUC-based pipeline for downloading USGS LiDAR and generating weakly-supervised silver training data. This is the primary data acquisition script.
@@ -773,6 +797,36 @@ Extracts curved/arched bridge rejections from processing logs. Parses logs for b
 | `--max-per-huc`    | 2                                     | Maximum bridges per HUC in the sample                    |
 | `--seed`           | 27                                    | Random seed for reproducibility                          |
 
+
+---
+
+### `utils/prepare_run.py`
+
+Prepares a self-contained pipeline run directory from a flat bridge GeoPackage. Splits the input into per-HUC GeoPackages matching the directory structure expected by `download_and_weak_supervise_hucs.py`, and writes run metadata.
+
+**CLI arguments:**
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--input` | *(required)* | Path to flat input GPKG file |
+| `--run-name` | *(required)* | Short name for this run (directory name under `--runs-dir`) |
+| `--huc-column` | `huc8` | Column name to group bridges by |
+| `--osmid-column` | `osmid` | Column name for bridge OSM IDs |
+| `--gpkg-template` | `osm_bridges_lidar_subset__{huc_id}.gpkg` | Filename template for per-HUC GeoPackages |
+| `--runs-dir` | `./data/runs` | Root directory for runs |
+| `--force` | False | Overwrite existing run directory |
+
+**Output structure:**
+
+```
+data/runs/{run-name}/
+├── input/{original_filename}.gpkg
+├── hucs/{huc_id}/osm_bridges_lidar_subset__{huc_id}.gpkg
+├── source/
+├── silver_training/
+├── predictions/
+└── run_config.json
+```
 
 ---
 

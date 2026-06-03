@@ -116,20 +116,55 @@ docker build --platform linux/amd64 -t bridge-classifier .
 > **Logging training output to a file:** For long runs, you can capture stdout/stderr so the experiment dir is self-contained. Create the experiment directory first (so the log file path exists), then use `tee` to write to a log file while still showing output in the terminal:
 
 ```bash
+# Step 0 (Optional): Prepare Run from Flat GeoPackage
+# If you have bridge data in a flat GeoPackage (e.g. from NOAA), split it into
+# the per-HUC directory structure expected by Step 1:
+docker compose run --rm bridge-classifier \
+  python utils/prepare_run.py \
+  --input ./data/noaa-provided/bridges.gpkg \
+  --run-name my-run-name \
+  --huc-column huc8 \
+  --osmid-column osmid
+# Then point Steps 1-2 at the run's directories:
+#   --hucs-dir ./data/runs/my-run-name/hucs
+#   --source-dir ./data/runs/my-run-name/source
+#   --silver-dir ./data/runs/my-run-name/silver_training
+
 # Step 1: Download & Weak Supervision
 # --skip-existing skips already processed outputs and bridges that previously had no lidar points (count==0).
-docker compose run --rm bridge-classifier python src/download_and_weak_supervise_hucs.py --source-dir ./data/ml-data/source --silver-dir ./data/ml-data/silver_training --hucs-dir ./data/osm/hucs --lidar-resources ./data/usgs_entwine/lidar_resources.geojson --worker 12 --skip-existing
+docker compose run --rm bridge-classifier \
+  python src/download_and_weak_supervise_hucs.py \
+  --source-dir ./data/ml-data/source \
+  --silver-dir ./data/ml-data/silver_training \
+  --hucs-dir ./data/osm/hucs \
+  --lidar-resources ./data/usgs_entwine/lidar_resources.geojson \
+  --worker 12 \
+  --skip-existing
 
 
 # Step 2: Preprocess & Normalization
 # --skip-existing skips already processed outputs.
-docker compose run --rm bridge-classifier python src/preprocess_bridges.py --input-dir ./data/ml-data/silver_training --output-dir ./data/ml-data/silver_training_normalized
+docker compose run --rm bridge-classifier \
+  python src/preprocess_bridges.py \
+  --input-dir ./data/ml-data/silver_training \
+  --output-dir ./data/ml-data/silver_training_normalized
 
 # Step 3: Split data (train/val/test)
-docker compose run --rm bridge-classifier python utils/split_data.py --laz-dir ./data/ml-data/silver_training --npy-dir ./data/ml-data/silver_training_normalized --output-dir ./data/ml-data --holdout-test-ids ./data/ml-data/holdout_test.txt --train-ratio 0.8 --val-ratio 0.2 --symlink
+docker compose run --rm bridge-classifier \
+  python utils/split_data.py \
+  --laz-dir ./data/ml-data/silver_training \
+  --npy-dir ./data/ml-data/silver_training_normalized \
+  --output-dir ./data/ml-data \
+  --holdout-test-ids ./data/ml-data/holdout_test.txt \
+  --train-ratio 0.8 \
+  --val-ratio 0.2 \
+  --symlink
 
 # Step 3a: Compute class weights (optional). Use output in training with --class-weights ./data/ml-data/class_weights.json
-docker compose run --rm bridge-classifier python utils/calculate_weights.py --data-dir ./data/ml-data/training --output ./data/ml-data/class_weights.json
+docker compose run --rm bridge-classifier \
+  python utils/calculate_weights.py \
+  --data-dir ./data/ml-data/training \
+  --output ./data/ml-data/class_weights.json
 
 # Step 4: Train Model (Requires NVIDIA GPU). Ensure the experiments directory exists and is writable (see setup above).
 # Pass class weights: add --class-weights ./data/ml-data/class_weights.json if you ran Step 3a.
@@ -252,8 +287,20 @@ docker compose run --rm \
 Example: train with early stopping on deck IoU (default), or on validation loss for comparison:
 
 ```bash
-python src/train.py --train --augment --val-dir=./data/ml-data/validation --epochs 50 --early-stopping --early-stopping-patience 10
-python src/train.py --train --augment --val-dir=./data/ml-data/validation --epochs 50 --monitor val_loss --early-stopping --early-stopping-patience 10
+python src/train.py \
+  --train --augment \
+  --val-dir=./data/ml-data/validation \
+  --epochs 50 \
+  --early-stopping \
+  --early-stopping-patience 10
+
+python src/train.py \
+  --train --augment \
+  --val-dir=./data/ml-data/validation \
+  --epochs 50 \
+  --monitor val_loss \
+  --early-stopping \
+  --early-stopping-patience 10
 ```
 
 See [Troubleshooting](#troubleshooting) for permission and other issues.
@@ -555,7 +602,10 @@ The normalization script generates JSON metadata files with the following struct
 You can run TensorBoard in a separate terminal (same Docker image) to watch metrics live. Use `-p 6006:6006` to map the container port to the host so you can open `http://localhost:6006` in the browser. Use `--bind_all` so TensorBoard listens on all interfaces (needed when running inside Docker).
 
 ```bash
-docker compose run -p 6006:6006 --rm bridge-classifier tensorboard --logdir=experiments/bridge-base-all-data-v0/version_0/ --bind_all
+docker compose run -p 6006:6006 --rm bridge-classifier \
+  tensorboard \
+  --logdir=experiments/bridge-base-all-data-v0/version_0/ \
+  --bind_all
 ```
 
 The `--logdir` path should match your experiment name and version (e.g. `experiments/<exp_name>/version_<N>/`). If you use a different `--experiments-dir` when training, use that base path for `--logdir`. TensorBoard logs are written by Lightning's TensorBoardLogger to the same directory as the CSV metrics.
