@@ -81,6 +81,9 @@ class BridgeProcessingConfig:
     default_buffer_meters: float = 10.0
     epsg_code: int = 3857
 
+    # Timeout Configuration
+    bridge_timeout: float = 300.0
+
     def __post_init__(self):
         """Set default values for mutable types."""
         if self.ignore_classes is None:

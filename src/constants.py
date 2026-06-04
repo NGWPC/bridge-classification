@@ -71,6 +71,10 @@ AWS_MAX_RETRIES = 3
 
 
 # --- Timeout machinery (lightweight — no spconv/torch dependency) ---
+import signal
+from contextlib import contextmanager
+
+
 class BridgeTimeout(BaseException):
     """Raised when a single bridge exceeds the per-bridge wall-clock timeout."""
     pass
@@ -78,3 +82,26 @@ class BridgeTimeout(BaseException):
 
 def _timeout_handler(signum, frame):
     raise BridgeTimeout()
+
+
+@contextmanager
+def bridge_timeout_guard(seconds):
+    """SIGALRM-based wall-clock timeout. Raises BridgeTimeout after `seconds`.
+
+    Usage:
+        try:
+            with bridge_timeout_guard(300):
+                result = long_running_operation()
+        except BridgeTimeout:
+            handle_timeout()
+    """
+    if seconds <= 0:
+        yield
+        return
+    old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old_handler)
