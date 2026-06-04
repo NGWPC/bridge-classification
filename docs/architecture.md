@@ -91,7 +91,7 @@ The definitive 4-class reference. All other components must agree with this tabl
 
 ## Phase A: Silver Data Generation (Weak Supervision)
 
-**Script**: `src/download_and_weak_supervise_hucs.py`
+**Script**: `src/download_and_weak_supervise_hucs.py` | **Algorithm module**: `src/weak_supervision.py`
 
 The weak supervision pipeline generates labeled training data automatically, avoiding the need for manual annotation at scale.
 
@@ -116,7 +116,7 @@ The weak supervision pipeline generates labeled training data automatically, avo
    - **Bridge Deck** (ASPRS 17): inside hull AND `-0.70 m ≤ ΔZ ≤ +0.20 m`
    - **Obstacles** (ASPRS 18): inside hull AND `+0.20 m < ΔZ < +15.0 m`
 
-### Configuration: `BridgeProcessingConfig`
+### Configuration: `BridgeProcessingConfig` (in `src/weak_supervision.py`)
 
 All parameters are centralised in the `BridgeProcessingConfig` dataclass. Key fields:
 
