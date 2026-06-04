@@ -88,7 +88,7 @@ def main():
     args = parser.parse_args()
 
     if args.from_s3:
-        from register_model import load_registry
+        from src.model_registry import load_registry
         from src.s3 import create_s3_client
         s3_client = create_s3_client(profile=args.profile)
         registry_key = f"{args.prefix}/registry.json"

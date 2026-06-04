@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from register_model import load_registry, upload_registry
+from src.model_registry import load_registry, upload_registry
 from src.s3 import create_s3_client
 
 

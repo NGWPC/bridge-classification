@@ -528,8 +528,7 @@ def _register_evaluation(model_name, eval_name, model_metrics, output_dir,
                          bucket, prefix, profile):
     """Update registry.json with evaluation metrics and upload artifacts to S3."""
     # Lazy imports — only needed when --register is used
-    sys.path.insert(0, os.path.dirname(__file__))
-    from register_model import load_registry, upload_registry
+    from src.model_registry import load_registry, upload_registry
     from src.s3 import create_s3_client, upload_file
 
     registry_key = f"{prefix}/registry.json"
