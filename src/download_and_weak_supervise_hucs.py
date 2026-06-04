@@ -81,6 +81,7 @@ from src.lidar_utils import (
     find_intersecting_sources as _find_sources,
     safe_source_name as _safe_name,
 )
+from src.gpkg_utils import read_bridge_gpkg, filter_by_ids, iter_huc_gpkgs, DEFAULT_GPKG_TEMPLATE
 
 try:
     from tqdm import tqdm
@@ -878,16 +879,13 @@ def _generate_tasks_for_one_huc(args: Tuple[Any, ...]) -> Tuple[List[TaskTuple],
 
     try:
         config = BridgeProcessingConfig.from_dict(config_dict)
-        gdf = gpd.read_file(str(gpkg_path))
-        gdf = gdf.to_crs(epsg=config.epsg_code)
-
-        if 'osmid' not in gdf.columns:
+        try:
+            gdf = read_bridge_gpkg(gpkg_path, required_cols=("osmid",), target_epsg=config.epsg_code)
+        except ValueError:
             return ([], None)
 
-        gdf['osmid'] = gdf['osmid'].astype(str)
         if osm_ids is not None:
-            osm_ids_str = [str(x) for x in osm_ids]
-            gdf = gdf[gdf['osmid'].isin(osm_ids_str)]
+            gdf = filter_by_ids(gdf, "osmid", osm_ids)
 
         if gdf.empty:
             return ([], None)
@@ -950,31 +948,21 @@ class BridgeProcessor:
             print(f"Error: HUCs directory not found: {self.hucs_dir}")
             return huc_files
 
-        for item in self.hucs_dir.iterdir():
-            huc_path = self.hucs_dir / item.name
-            if huc_path.is_dir():
-                huc_id = item.name
-                if huc_ids is None or huc_id in huc_ids:
-                    gpkg_file = huc_path / f"osm_bridges_lidar_subset__{huc_id}.gpkg"
-                    if gpkg_file.exists():
-                        huc_files.append((huc_id, str(gpkg_file)))
+        for huc_id, gpkg_path in iter_huc_gpkgs(self.hucs_dir, DEFAULT_GPKG_TEMPLATE, huc_ids):
+            huc_files.append((huc_id, str(gpkg_path)))
 
         return huc_files
 
     def load_bridges(self, gpkg_path: str, osm_ids: Optional[List[str]] = None) -> gpd.GeoDataFrame:
         """Load bridges from GPKG file, optionally filtered by OSM IDs."""
-        gdf = gpd.read_file(str(gpkg_path))
-        gdf = gdf.to_crs(epsg=self.config.epsg_code)
-
-        if 'osmid' not in gdf.columns:
+        try:
+            gdf = read_bridge_gpkg(gpkg_path, required_cols=("osmid",), target_epsg=self.config.epsg_code)
+        except ValueError:
             print(f"Warning: 'osmid' column not found in {gpkg_path}")
             return gpd.GeoDataFrame()
 
-        gdf['osmid'] = gdf['osmid'].astype(str)
-
         if osm_ids is not None:
-            osm_ids_str = [str(x) for x in osm_ids]
-            gdf = gdf[gdf['osmid'].isin(osm_ids_str)]
+            gdf = filter_by_ids(gdf, "osmid", osm_ids)
 
         return gdf
 

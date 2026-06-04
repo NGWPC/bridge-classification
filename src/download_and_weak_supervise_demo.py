@@ -15,11 +15,14 @@ Usage:
     python src/download_and_weak_supervise_demo.py
 """
 
-import geopandas as gpd
 import pdal
 import json
 import os
+import sys
 import numpy as np
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from src.gpkg_utils import read_bridge_gpkg, filter_by_ids
 from sklearn.linear_model import RANSACRegressor, LinearRegression
 from sklearn.decomposition import PCA
 from scipy.spatial import ConvexHull
@@ -106,15 +109,8 @@ def run_weak_supervision_pipeline():
     print(f"Loading geometry from {GPKG_PATH}...")
 
     try:
-        gdf = gpd.read_file(GPKG_PATH)
-        gdf = gdf.to_crs(epsg=3857)
-
-        if 'osmid' not in gdf.columns:
-            print("Error: 'osmid' column not found.")
-            return
-        gdf['osmid'] = gdf['osmid'].astype(str)
-        target_ids_str = [str(x) for x in TARGET_OSMIDS]
-        bridges = gdf[gdf['osmid'].isin(target_ids_str)]
+        gdf = read_bridge_gpkg(GPKG_PATH, required_cols=("osmid",), target_epsg=3857)
+        bridges = filter_by_ids(gdf, "osmid", TARGET_OSMIDS)
 
         if bridges.empty:
             print("No matching OSM IDs found.")

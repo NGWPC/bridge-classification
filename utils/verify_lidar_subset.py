@@ -20,10 +20,12 @@ from pathlib import Path
 
 import geopandas as gpd
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from src.gpkg_utils import iter_huc_gpkgs
+
 # Optional S3 support
 try:
     from botocore.exceptions import ClientError
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
     from src.s3 import create_s3_client
     HAS_BOTO = True
 except ImportError:
@@ -133,15 +135,9 @@ def _verify_one_huc_s3(
 
 def list_hucs_local(data_dir: Path) -> list[str]:
     """Return list of HUC IDs (subdir names) that have osm_bridges_subset__*.gpkg."""
-    huc_ids = []
     if not data_dir.exists() or not data_dir.is_dir():
-        return huc_ids
-    for item in data_dir.iterdir():
-        if item.is_dir():
-            huc_id = item.name
-            if (item / f"osm_bridges_subset__{huc_id}.gpkg").exists():
-                huc_ids.append(huc_id)
-    return sorted(huc_ids)
+        return []
+    return [huc_id for huc_id, _ in iter_huc_gpkgs(data_dir, "osm_bridges_subset__{huc_id}.gpkg")]
 
 
 def list_hucs_s3(bucket: str, prefix: str, profile_name: str | None) -> list[str]:

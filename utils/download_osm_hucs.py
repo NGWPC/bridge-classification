@@ -26,6 +26,7 @@ from botocore.exceptions import ClientError
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from src.s3 import create_s3_client
+from src.gpkg_utils import write_gpkg
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings('ignore')
@@ -120,15 +121,14 @@ def _process_one_huc(work_item: tuple[str, str, str, str | None, str | None, str
 
     if output_dir:
         huc_dir = os.path.join(output_dir, huc_id)
-        os.makedirs(huc_dir, exist_ok=True)
         local_original = os.path.join(huc_dir, f"osm_bridges_subset__{huc_id}.gpkg")
         local_filtered = os.path.join(huc_dir, f"osm_bridges_lidar_subset__{huc_id}.gpkg")
         local_not_lidar = os.path.join(huc_dir, f"osm_bridges_not_lidar_subset__{huc_id}.gpkg")
-        gdf.to_file(local_original, driver="GPKG")
+        write_gpkg(gdf, local_original)
         if save_subsets in ('lidar', 'both') and not lidar_gdf.empty:
-            lidar_gdf.to_file(local_filtered, driver="GPKG")
+            write_gpkg(lidar_gdf, local_filtered)
         if save_subsets in ('not_lidar', 'both') and not not_lidar_gdf.empty:
-            not_lidar_gdf.to_file(local_not_lidar, driver="GPKG")
+            write_gpkg(not_lidar_gdf, local_not_lidar)
 
     return {
         'processed': 1,
