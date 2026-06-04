@@ -25,7 +25,6 @@ import argparse
 import json
 import os
 import shlex
-import signal
 import sys
 from pathlib import Path
 from typing import Optional
@@ -37,7 +36,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 from src.constants import (
     LAS_TO_MODEL_MAP, NUM_CLASSES, BRIDGE_DECK_MODEL_CLASS as BRIDGE_DECK_CLASS,
-    CLASS_NAMES, BridgeTimeout, _timeout_handler,
+    CLASS_NAMES, BridgeTimeout, bridge_timeout_guard,
 )
 from src.las_io import read_las
 
@@ -692,10 +691,7 @@ def main():
         model = load_model(args.model, device)
         inference_output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Setup SIGALRM timeout (Unix only, only when running inference)
     use_timeout = sys.platform != "win32" and model is not None
-    if use_timeout:
-        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
 
     bridge_results = []
     skipped = []
@@ -704,92 +700,84 @@ def main():
     if HAS_TQDM:
         iterator = tqdm(gold_bridges, desc="Evaluating bridges")
 
-    try:
-        for huc_id, stem, gold_path in iterator:
-            bridge_id = f"{huc_id}/{stem}"
+    for huc_id, stem, gold_path in iterator:
+        bridge_id = f"{huc_id}/{stem}"
 
-            # Find matching test LAZ (needed for silver baseline and as inference input)
-            test_laz = find_matching_file(args.test_dir, huc_id, stem)
-            if test_laz is None:
-                print(f"WARN (bridge={bridge_id}): No test LAZ found, skipping")
-                skipped.append((bridge_id, "no_test_file"))
-                continue
+        # Find matching test LAZ (needed for silver baseline and as inference input)
+        test_laz = find_matching_file(args.test_dir, huc_id, stem)
+        if test_laz is None:
+            print(f"WARN (bridge={bridge_id}): No test LAZ found, skipping")
+            skipped.append((bridge_id, "no_test_file"))
+            continue
 
-            # Load gold ground truth
-            try:
-                _, gold_labels = load_classifications(gold_path)
-            except Exception as e:
-                print(f"WARN (bridge={bridge_id}): Failed to load gold file: {e}")
-                skipped.append((bridge_id, "gold_load_error"))
-                continue
+        # Load gold ground truth
+        try:
+            _, gold_labels = load_classifications(gold_path)
+        except Exception as e:
+            print(f"WARN (bridge={bridge_id}): Failed to load gold file: {e}")
+            skipped.append((bridge_id, "gold_load_error"))
+            continue
 
-            if len(gold_labels) < 100:
-                skipped.append((bridge_id, "too_few_points"))
-                continue
+        if len(gold_labels) < 100:
+            skipped.append((bridge_id, "too_few_points"))
+            continue
 
-            entry = {"huc_id": huc_id, "bridge_stem": stem}
+        entry = {"huc_id": huc_id, "bridge_stem": stem}
 
-            # --- Silver baseline ---
-            try:
-                _, silver_labels = load_classifications(test_laz)
-                if len(silver_labels) != len(gold_labels):
-                    print(f"WARN (bridge={bridge_id}): Silver/gold point count mismatch "
-                          f"({len(silver_labels)} vs {len(gold_labels)})")
-                    entry["silver_status"] = "point_count_mismatch"
-                    entry["silver_result"] = None
-                else:
-                    entry["silver_result"] = evaluate_bridge(gold_labels, silver_labels)
-                    entry["silver_status"] = "ok"
-            except Exception as e:
-                print(f"WARN (bridge={bridge_id}): Silver evaluation failed: {e}")
-                entry["silver_status"] = "error"
+        # --- Silver baseline ---
+        try:
+            _, silver_labels = load_classifications(test_laz)
+            if len(silver_labels) != len(gold_labels):
+                print(f"WARN (bridge={bridge_id}): Silver/gold point count mismatch "
+                      f"({len(silver_labels)} vs {len(gold_labels)})")
+                entry["silver_status"] = "point_count_mismatch"
                 entry["silver_result"] = None
-
-            # --- Model predictions ---
-            if args.inference_dir is not None:
-                pred_path = find_matching_file(args.inference_dir, huc_id, stem)
-                if pred_path is None:
-                    print(f"WARN (bridge={bridge_id}): No inference output found")
-                    entry["model_status"] = "no_inference_file"
-                    entry["model_result"] = None
-                else:
-                    entry["model_status"], entry["model_result"] = \
-                        _load_and_evaluate(pred_path, gold_labels, bridge_id)
             else:
-                pred_path = inference_output_dir / huc_id / f"{stem}.laz"
-                pred_path.parent.mkdir(parents=True, exist_ok=True)
+                entry["silver_result"] = evaluate_bridge(gold_labels, silver_labels)
+                entry["silver_status"] = "ok"
+        except Exception as e:
+            print(f"WARN (bridge={bridge_id}): Silver evaluation failed: {e}")
+            entry["silver_status"] = "error"
+            entry["silver_result"] = None
 
-                if use_timeout:
-                    signal.setitimer(signal.ITIMER_REAL, args.bridge_timeout)
-                try:
+        # --- Model predictions ---
+        if args.inference_dir is not None:
+            pred_path = find_matching_file(args.inference_dir, huc_id, stem)
+            if pred_path is None:
+                print(f"WARN (bridge={bridge_id}): No inference output found")
+                entry["model_status"] = "no_inference_file"
+                entry["model_result"] = None
+            else:
+                entry["model_status"], entry["model_result"] = \
+                    _load_and_evaluate(pred_path, gold_labels, bridge_id)
+        else:
+            pred_path = inference_output_dir / huc_id / f"{stem}.laz"
+            pred_path.parent.mkdir(parents=True, exist_ok=True)
+
+            timeout_secs = args.bridge_timeout if use_timeout else 0
+            try:
+                with bridge_timeout_guard(timeout_secs):
                     ok = run_inference_fn(model, test_laz, pred_path, args.voxel_size, device)
-                except BridgeTimeout:
-                    print(f"TIMEOUT (bridge={bridge_id}): exceeded {args.bridge_timeout}s")
-                    entry["model_status"] = "timeout"
-                    entry["model_result"] = None
-                    bridge_results.append(entry)
-                    continue
-                except Exception as e:
-                    print(f"WARN (bridge={bridge_id}): Inference failed: {e}")
-                    entry["model_status"] = "inference_error"
-                    entry["model_result"] = None
-                    ok = False
-                finally:
-                    if use_timeout:
-                        signal.setitimer(signal.ITIMER_REAL, 0)
+            except BridgeTimeout:
+                print(f"TIMEOUT (bridge={bridge_id}): exceeded {args.bridge_timeout}s")
+                entry["model_status"] = "timeout"
+                entry["model_result"] = None
+                bridge_results.append(entry)
+                continue
+            except Exception as e:
+                print(f"WARN (bridge={bridge_id}): Inference failed: {e}")
+                entry["model_status"] = "inference_error"
+                entry["model_result"] = None
+                ok = False
 
-                if ok:
-                    entry["model_status"], entry["model_result"] = \
-                        _load_and_evaluate(pred_path, gold_labels, bridge_id)
-                elif "model_status" not in entry:
-                    entry["model_status"] = "inference_error"
-                    entry["model_result"] = None
+            if ok:
+                entry["model_status"], entry["model_result"] = \
+                    _load_and_evaluate(pred_path, gold_labels, bridge_id)
+            elif "model_status" not in entry:
+                entry["model_status"] = "inference_error"
+                entry["model_result"] = None
 
-            bridge_results.append(entry)
-
-    finally:
-        if use_timeout:
-            signal.signal(signal.SIGALRM, old_handler)
+        bridge_results.append(entry)
 
     # Aggregate
     model_results = [r["model_result"] for r in bridge_results if r.get("model_result")]

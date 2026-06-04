@@ -38,7 +38,6 @@ Usage (batch via pairs file):
 
 import argparse
 import os
-import signal
 import sys
 from pathlib import Path
 
@@ -51,7 +50,7 @@ import torch
 from src.constants import (
     BRIDGE_DECK_ASPRS_CODE, BRIDGE_DECK_MODEL_CLASS, MIN_POINT_COUNT,
     MODEL_TO_LAS_MAP, OBSTACLES_ASPRS_CODE, OBSTACLES_MODEL_CLASS,
-    SPATIAL_SHAPE_PADDING, BridgeTimeout, _timeout_handler,
+    SPATIAL_SHAPE_PADDING, BridgeTimeout, bridge_timeout_guard,
 )
 from src.las_io import read_las, write_las, normalize_intensity
 from src.voxelization import voxelize
@@ -287,27 +286,21 @@ def run_batch_inference(model, pairs, voxel_size=0.1, device=torch.device("cuda"
     failed = 0
     skipped = 0
     total = len(pairs)
-    old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-    try:
-        for i, (input_path, output_path) in enumerate(pairs, 1):
-            bridge_id = os.path.splitext(os.path.basename(str(input_path)))[0]
-            print(f"\n[{i}/{total}] {input_path} -> {output_path}")
-            signal.setitimer(signal.ITIMER_REAL, bridge_timeout)
-            try:
+    for i, (input_path, output_path) in enumerate(pairs, 1):
+        bridge_id = os.path.splitext(os.path.basename(str(input_path)))[0]
+        print(f"\n[{i}/{total}] {input_path} -> {output_path}")
+        try:
+            with bridge_timeout_guard(bridge_timeout):
                 ok = run_inference(model, input_path, output_path, voxel_size, device, mode=mode)
-            except BridgeTimeout:
-                print(f"TIMEOUT: bridge={bridge_id} exceeded {bridge_timeout}s, skipping")
-                ok = False
-            finally:
-                signal.setitimer(signal.ITIMER_REAL, 0)  # cancel timer whether success, failure, or timeout
-            if ok == 'skipped':
-                skipped += 1
-            elif ok:
-                succeeded += 1
-            else:
-                failed += 1
-    finally:
-        signal.signal(signal.SIGALRM, old_handler)  # always restore original handler
+        except BridgeTimeout:
+            print(f"TIMEOUT: bridge={bridge_id} exceeded {bridge_timeout}s, skipping")
+            ok = False
+        if ok == 'skipped':
+            skipped += 1
+        elif ok:
+            succeeded += 1
+        else:
+            failed += 1
     print(f"\nBatch complete: {succeeded} succeeded, {failed} failed, {skipped} skipped out of {total}")
     return succeeded, failed, skipped
 

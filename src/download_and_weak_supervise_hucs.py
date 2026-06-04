@@ -78,6 +78,7 @@ from src.lidar_utils import (
 )
 from src.gpkg_utils import read_bridge_gpkg, filter_by_ids, iter_huc_gpkgs, DEFAULT_GPKG_TEMPLATE
 from src.weak_supervision import BridgeProcessingConfig, process_bridge
+from src.constants import BridgeTimeout, bridge_timeout_guard
 
 try:
     from tqdm import tqdm
@@ -284,8 +285,15 @@ def process_bridge_source(args: TaskTuple) -> Dict[str, Any]:
         if logger:
             logger.info(f"[Task start] huc_id={huc_id} osmid={osmid} source_name={source_name}")
 
-        # Process with weak supervision
-        result = process_bridge(source_url, bridge_geometry, config, buffer_meters)
+        # Process with weak supervision (with per-bridge timeout)
+        try:
+            with bridge_timeout_guard(config.bridge_timeout):
+                result = process_bridge(source_url, bridge_geometry, config, buffer_meters)
+        except BridgeTimeout:
+            print(f"TIMEOUT: bridge={osmid} source={source_name} exceeded {config.bridge_timeout}s, skipping", flush=True)
+            if logger:
+                logger.error(f"[{huc_id}] TIMEOUT: OSM ID {osmid} / Source {source_name} exceeded {config.bridge_timeout}s")
+            result = {'success': False, 'error': f'Timeout after {config.bridge_timeout}s'}
 
         if result is None or not result.get('success', False):
             error_msg = result.get('error', 'Unknown processing error') if result else 'Processing returned None'
@@ -704,13 +712,20 @@ def main() -> None:
         help='Directory for log files (default: ./logs)'
     )
 
+    parser.add_argument(
+        '--bridge-timeout',
+        type=float,
+        default=300,
+        help='Seconds before a hung bridge is skipped (default: 300)',
+    )
+
     args = parser.parse_args()
 
     global logger
     logger = setup_logging('bridge_processing', args.log_dir)
 
     # Create configuration instance
-    config = BridgeProcessingConfig()
+    config = BridgeProcessingConfig(bridge_timeout=args.bridge_timeout)
     # Create processor
     processor = BridgeProcessor(
         hucs_dir=args.hucs_dir,

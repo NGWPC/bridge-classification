@@ -28,7 +28,7 @@ from botocore.exceptions import ClientError
 
 # Add project root to path so we can import from src/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from src.constants import BridgeTimeout, MIN_POINT_COUNT, _timeout_handler
+from src.constants import BridgeTimeout, MIN_POINT_COUNT, bridge_timeout_guard
 from src.inference import load_model, run_inference
 from src.s3 import (
     create_s3_client, download_file, object_exists, parse_s3_uri,
@@ -154,125 +154,117 @@ def main():
     skipped_too_few_points = 0
     download_failed = 0
 
-    old_alarm_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+    for i, manifest_line in enumerate(chunk_lines, 1):
+        bridge_start = time.time()
+        global_line = start + i  # 1-based global manifest position
 
-    try:
-        for i, manifest_line in enumerate(chunk_lines, 1):
-            bridge_start = time.time()
-            global_line = start + i  # 1-based global manifest position
+        # Check for SPOT shutdown
+        if shutdown_requested:
+            log("SPOT_SHUTDOWN stopping before next bridge", child_index=idx)
+            break
 
-            # Check for SPOT shutdown
-            if shutdown_requested:
-                log("SPOT_SHUTDOWN stopping before next bridge", child_index=idx)
-                break
+        bridge_id = PurePosixPath(manifest_line).stem
+        huc_id = manifest_line.split('/')[0]
 
-            bridge_id = PurePosixPath(manifest_line).stem
-            huc_id = manifest_line.split('/')[0]
-
-            # 4a. Resolve S3 paths
-            try:
-                input_key = resolve_input_key(s3, bucket, cfg['s3_input_prefix'], manifest_line)
-            except FileNotFoundError:
-                log(f"INPUT_NOT_FOUND manifest_line=\"{manifest_line}\"",
-                    child_index=idx, bridge_id=bridge_id)
-                download_failed += 1
-                continue
-
-            input_ext = PurePosixPath(input_key).suffix
-            output_keys = resolve_output_keys(cfg['s3_output_prefix'], manifest_line, input_ext, mode)
-
-            # 4b. Skip if output already exists in S3 (resumability)
-            primary_exists = object_exists(s3, bucket, output_keys['primary'])
-            if mode == 'both':
-                masked_exists = object_exists(s3, bucket, output_keys.get('masked', ''))
-                all_exist = primary_exists and masked_exists
-            else:
-                all_exist = primary_exists
-
-            if all_exist:
-                log(f"SKIP_EXISTS ({i}/{chunk_size}) manifest_line={global_line} huc={huc_id}",
-                    child_index=idx, bridge_id=bridge_id)
-                skipped_exists += 1
-                continue
-
-            # 4c. Download input
-            input_filename = PurePosixPath(input_key).name
-            local_input = str(input_dir / input_filename)
-            try:
-                download_file(s3, bucket, input_key, local_input)
-            except ClientError as e:
-                log(f"DOWNLOAD_FAILED error=\"{e}\" huc={huc_id} manifest_line={global_line}",
-                    child_index=idx, bridge_id=bridge_id)
-                download_failed += 1
-                continue
-
-            # 4d. Prepare local output path (derived from resolve_output_keys)
-            output_name = PurePosixPath(output_keys['primary']).name
-            local_output_dir = output_dir / huc_id
-            local_output_dir.mkdir(parents=True, exist_ok=True)
-            local_output = str(local_output_dir / output_name)
-
-            # 4e. Run inference with SIGALRM timeout
-            log(f"INFER_START ({i}/{chunk_size}) mode={mode} huc={huc_id} manifest_line={global_line}",
+        # 4a. Resolve S3 paths
+        try:
+            input_key = resolve_input_key(s3, bucket, cfg['s3_input_prefix'], manifest_line)
+        except FileNotFoundError:
+            log(f"INPUT_NOT_FOUND manifest_line=\"{manifest_line}\"",
                 child_index=idx, bridge_id=bridge_id)
-            signal.setitimer(signal.ITIMER_REAL, bridge_timeout)
-            try:
+            download_failed += 1
+            continue
+
+        input_ext = PurePosixPath(input_key).suffix
+        output_keys = resolve_output_keys(cfg['s3_output_prefix'], manifest_line, input_ext, mode)
+
+        # 4b. Skip if output already exists in S3 (resumability)
+        primary_exists = object_exists(s3, bucket, output_keys['primary'])
+        if mode == 'both':
+            masked_exists = object_exists(s3, bucket, output_keys.get('masked', ''))
+            all_exist = primary_exists and masked_exists
+        else:
+            all_exist = primary_exists
+
+        if all_exist:
+            log(f"SKIP_EXISTS ({i}/{chunk_size}) manifest_line={global_line} huc={huc_id}",
+                child_index=idx, bridge_id=bridge_id)
+            skipped_exists += 1
+            continue
+
+        # 4c. Download input
+        input_filename = PurePosixPath(input_key).name
+        local_input = str(input_dir / input_filename)
+        try:
+            download_file(s3, bucket, input_key, local_input)
+        except ClientError as e:
+            log(f"DOWNLOAD_FAILED error=\"{e}\" huc={huc_id} manifest_line={global_line}",
+                child_index=idx, bridge_id=bridge_id)
+            download_failed += 1
+            continue
+
+        # 4d. Prepare local output path (derived from resolve_output_keys)
+        output_name = PurePosixPath(output_keys['primary']).name
+        local_output_dir = output_dir / huc_id
+        local_output_dir.mkdir(parents=True, exist_ok=True)
+        local_output = str(local_output_dir / output_name)
+
+        # 4e. Run inference with per-bridge timeout
+        log(f"INFER_START ({i}/{chunk_size}) mode={mode} huc={huc_id} manifest_line={global_line}",
+            child_index=idx, bridge_id=bridge_id)
+        try:
+            with bridge_timeout_guard(bridge_timeout):
                 ok = run_inference(model, local_input, local_output, voxel_size=0.1,
                                    device=device, mode=mode)
-            except BridgeTimeout:
-                log(f"INFER_FAILED reason=timeout bridge_timeout={bridge_timeout}s huc={huc_id} manifest_line={global_line}",
-                    child_index=idx, bridge_id=bridge_id)
-                ok = False
-            finally:
-                signal.setitimer(signal.ITIMER_REAL, 0)  # cancel alarm before upload
+        except BridgeTimeout:
+            log(f"INFER_FAILED reason=timeout bridge_timeout={bridge_timeout}s huc={huc_id} manifest_line={global_line}",
+                child_index=idx, bridge_id=bridge_id)
+            ok = False
 
-            if ok == 'skipped':
-                log(f"SKIP_SMALL_FILE points<{MIN_POINT_COUNT} huc={huc_id} manifest_line={global_line}",
-                    child_index=idx, bridge_id=bridge_id)
-                skipped_too_few_points += 1
-                cleanup(local_input, local_output)
-                continue
-
-            if not ok:
-                log(f"INFER_FAILED reason=inference_error huc={huc_id} manifest_line={global_line}",
-                    child_index=idx, bridge_id=bridge_id)
-                failed += 1
-                cleanup(local_input, local_output)
-                continue
-
-            # 4f. Upload output(s) immediately
-            try:
-                upload_file(s3, local_output, bucket, output_keys['primary'])
-                log(f"UPLOADED s3://{bucket}/{output_keys['primary']}",
-                    child_index=idx, bridge_id=bridge_id)
-
-                # mode=both: also upload the masked file that run_inference wrote
-                if mode == 'both' and 'masked' in output_keys:
-                    masked_name = PurePosixPath(output_keys['masked']).name
-                    masked_local = str(local_output_dir / masked_name)
-                    if os.path.isfile(masked_local):
-                        upload_file(s3, masked_local, bucket, output_keys['masked'])
-                        log(f"UPLOADED s3://{bucket}/{output_keys['masked']}",
-                            child_index=idx, bridge_id=bridge_id)
-                        cleanup(masked_local)
-
-                bridge_seconds = time.time() - bridge_start
-                log(f"INFER_OK bridge_seconds={bridge_seconds:.1f}s ({i}/{chunk_size}) huc={huc_id}",
-                    child_index=idx, bridge_id=bridge_id)
-                succeeded += 1
-            except ClientError as e:
-                log(f"UPLOAD_FAILED error=\"{e}\" huc={huc_id}",
-                    child_index=idx, bridge_id=bridge_id)
-                failed += 1
-
-            # 4g. Cleanup local files
+        if ok == 'skipped':
+            log(f"SKIP_SMALL_FILE points<{MIN_POINT_COUNT} huc={huc_id} manifest_line={global_line}",
+                child_index=idx, bridge_id=bridge_id)
+            skipped_too_few_points += 1
             cleanup(local_input, local_output)
+            continue
 
-            # 4h. Free GPU memory
-            torch.cuda.empty_cache()
+        if not ok:
+            log(f"INFER_FAILED reason=inference_error huc={huc_id} manifest_line={global_line}",
+                child_index=idx, bridge_id=bridge_id)
+            failed += 1
+            cleanup(local_input, local_output)
+            continue
 
-    finally:
-        signal.signal(signal.SIGALRM, old_alarm_handler)
+        # 4f. Upload output(s) immediately
+        try:
+            upload_file(s3, local_output, bucket, output_keys['primary'])
+            log(f"UPLOADED s3://{bucket}/{output_keys['primary']}",
+                child_index=idx, bridge_id=bridge_id)
+
+            # mode=both: also upload the masked file that run_inference wrote
+            if mode == 'both' and 'masked' in output_keys:
+                masked_name = PurePosixPath(output_keys['masked']).name
+                masked_local = str(local_output_dir / masked_name)
+                if os.path.isfile(masked_local):
+                    upload_file(s3, masked_local, bucket, output_keys['masked'])
+                    log(f"UPLOADED s3://{bucket}/{output_keys['masked']}",
+                        child_index=idx, bridge_id=bridge_id)
+                    cleanup(masked_local)
+
+            bridge_seconds = time.time() - bridge_start
+            log(f"INFER_OK bridge_seconds={bridge_seconds:.1f}s ({i}/{chunk_size}) huc={huc_id}",
+                child_index=idx, bridge_id=bridge_id)
+            succeeded += 1
+        except ClientError as e:
+            log(f"UPLOAD_FAILED error=\"{e}\" huc={huc_id}",
+                child_index=idx, bridge_id=bridge_id)
+            failed += 1
+
+        # 4g. Cleanup local files
+        cleanup(local_input, local_output)
+
+        # 4h. Free GPU memory
+        torch.cuda.empty_cache()
 
     # --- 5. Summary ---
     job_seconds = time.time() - job_start

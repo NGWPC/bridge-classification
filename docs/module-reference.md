@@ -34,10 +34,10 @@ Shared constants and lightweight utilities. Zero heavy dependencies (no torch, s
 **Classes / Functions:**
 
 
-| Name                     | Description                                                                |
-| ------------------------ | -------------------------------------------------------------------------- |
-| `BridgeTimeout`          | Exception raised when a bridge exceeds the per-bridge wall-clock timeout   |
-| `_timeout_handler(signum, frame)` | SIGALRM handler that raises `BridgeTimeout`                       |
+| Name | Description |
+|------|-------------|
+| `BridgeTimeout` | Exception raised when a bridge exceeds the per-bridge wall-clock timeout |
+| `bridge_timeout_guard(seconds)` | Context manager: sets SIGALRM timer, yields, cleans up. Raises `BridgeTimeout` on expiry. |
 
 
 No CLI. Imported by `inference.py`, `train.py`, `preprocess_bridges.py`, `evaluate_model.py`, `batch_entrypoint.py`, `s3.py`.
@@ -212,6 +212,7 @@ Full HUC-based pipeline for downloading USGS LiDAR and generating weakly-supervi
 | `--buffer`          | 10.0                                          | Bridge geometry buffer in meters         |
 | `--workers`         | CPU count                                     | Parallel worker processes                |
 | `--skip-existing`   | False                                         | Skip bridges already processed           |
+| `--bridge-timeout`  | 300                                           | Seconds before a hung bridge is skipped  |
 | `--log-dir`         | `./logs`                                      | Directory for processing logs            |
 | `--no-progress`     | False                                         | Disable tqdm progress bars               |
 
