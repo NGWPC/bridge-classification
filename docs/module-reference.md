@@ -152,32 +152,50 @@ Shared GeoPackage I/O utilities for bridge data. Consolidates the read/validate/
 | `iter_huc_gpkgs(hucs_dir, filename_template, huc_ids)` | Yield `(huc_id, gpkg_path)` for each HUC directory with a matching GPKG |
 | `filter_by_ids(gdf, column, ids)` | Filter GeoDataFrame by ID list with automatic str casting |
 
-No CLI. Imported by `prepare_run.py`. Designed to be adopted by `download_and_weak_supervise_hucs.py`, `download_bridge_lidar.py`, `find_new_source_candidates.py`, and other GPKG-consuming scripts.
+No CLI. Imported by `prepare_run.py`, `download_and_weak_supervise_hucs.py`, `download_bridge_lidar.py`, `find_new_source_candidates.py`, and other GPKG-consuming scripts.
+
+---
+
+### `src/weak_supervision.py`
+
+Core weak supervision algorithm for bridge LiDAR classification. RANSAC plane fitting, linearity checking, convex hull masking, and Z-distance heuristic labeling for determining linear vs. complex bridges.
+
+**Classes:**
+
+| Class | Description |
+|-------|-------------|
+| `BridgeProcessingConfig` | Dataclass with all pipeline parameters (PDAL settings, RANSAC thresholds, linearity thresholds, classification Z-ranges). Supports `from_dict()`/`to_dict()` for multiprocessing serialization. |
+
+**Functions:**
+
+| Function | Description |
+|----------|-------------|
+| `check_bridge_linearity(xy, z, config, deviation_threshold)` | Bin bridge into slices, fit skeleton line, check deviation. Returns `(is_curved, max_deviation)`. |
+| `fit_ransac_from_arrays(arrays, config)` | RANSAC plane fit on structured numpy arrays. Returns dict with plane coefficients, inlier mask, hull mask. Used by visualization notebooks. |
+| `process_bridge(ept_url, geometry, config, buffer_meters)` | Full pipeline: EPT download → SMRF → RANSAC → linearity check → Z-distance classification. Returns labeled arrays or error dict. |
+
+No CLI. Imported by `download_and_weak_supervise_hucs.py`, `download_and_weak_supervise_demo.py`, `notebooks/ransac_deck_planes.ipynb`.
 
 ---
 
 ### `src/download_and_weak_supervise_hucs.py`
 
-Full HUC-based pipeline for downloading USGS LiDAR and generating weakly-supervised silver training data. This is the primary data acquisition script.
+Full HUC-based pipeline for downloading USGS LiDAR and generating weakly-supervised silver training data. This is the primary data acquisition script. Uses `src/weak_supervision.py` for the core algorithm.
 
 **Key classes:**
 
-
-| Class                     | Description                                                                                                                                                    |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BridgeProcessingConfig`  | Dataclass containing all pipeline parameters (PDAL settings, RANSAC thresholds, classification Z-ranges). Pass `--buffer` and other CLI args to customize.     |
-| `LidarSourceFinder`       | Loads `lidar_resources.geojson` and builds a spatial index. `find_intersecting_sources(geometry, buffer)` returns a list of `{"url": ..., "name": ...}` dicts. |
-| `WeakSupervisionPipeline` | Orchestrates download → SMRF → RANSAC → QC → classification for a single bridge. Constructed from a `BridgeProcessingConfig`.                                  |
-
+| Class | Description |
+|-------|-------------|
+| `LidarSourceFinder` | Loads `lidar_resources.geojson` and builds a spatial index. `find_intersecting_sources(geometry, buffer)` returns a list of source dicts. |
+| `DataManager` | Handles file I/O: writes source and silver LAZ files to disk via PDAL. |
+| `BridgeProcessor` | Orchestrates multiprocessing: generates tasks, spawns workers, aggregates results. |
 
 **Key functions:**
 
-
-| Function                            | Description                                                                        |
-| ----------------------------------- | ---------------------------------------------------------------------------------- |
-| `process_bridge_worker(task_tuple)` | Multiprocessing worker: processes one bridge and writes source + silver LAZ files. |
-| `process_huc(huc_id, ...)`          | Processes all bridges in a single HUC directory.                                   |
-| `main()`                            | CLI entry point.                                                                   |
+| Function | Description |
+|----------|-------------|
+| `process_bridge_source(task_tuple)` | Multiprocessing worker: calls `process_bridge()` and writes source + silver LAZ files. |
+| `main()` | CLI entry point. |
 
 
 **CLI arguments:**
@@ -202,16 +220,13 @@ Full HUC-based pipeline for downloading USGS LiDAR and generating weakly-supervi
 
 ### `src/download_and_weak_supervise_demo.py`
 
-Simplified single-dataset demo for testing the weak supervision algorithm on a small set of known bridge OSM IDs. Configuration is via constants at the top of the file (`LIDAR_DATASET`, `TARGET_OSMIDS`, `BUFFER_METERS`).
+Simplified single-dataset demo for testing the weak supervision algorithm on a small set of known bridge OSM IDs. Uses `process_bridge()` from `src/weak_supervision.py` for the core algorithm. Configuration is via constants at the top of the file (`LIDAR_DATASET`, `TARGET_OSMIDS`, `BUFFER_METERS`).
 
 **Key functions:**
 
-
-| Function                                           | Description                                                                          |
-| -------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `check_bridge_linearity(xy_points, z_points, ...)` | Slices bridge into bins, fits a skeleton line, returns `(is_curved, max_deviation)`. |
-| `run_weak_supervision_pipeline()`                  | Main pipeline: download → SMRF → RANSAC → classify → write LAZ.                      |
-
+| Function | Description |
+|----------|-------------|
+| `run_weak_supervision_pipeline()` | Loads GPKG, loops through target bridges, calls `process_bridge()`, saves results. |
 
 No CLI arguments. Edit constants at top of file to configure.
 

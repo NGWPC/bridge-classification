@@ -28,7 +28,11 @@ _heavy_mods = [
     'spconv', 'spconv.pytorch',
 ]
 for _mod in _heavy_mods:
-    sys.modules.setdefault(_mod, MagicMock())
+    if _mod not in sys.modules:
+        try:
+            __import__(_mod)
+        except ImportError:
+            sys.modules[_mod] = MagicMock()
 
 
 # ---------------------------------------------------------------------------
