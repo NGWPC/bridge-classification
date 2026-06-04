@@ -622,18 +622,30 @@ No CLI arguments. Run directly: `python utils/verify_ransac_parity.py`
 
 ---
 
+### `src/model_registry.py`
+
+Shared I/O operations for the S3-backed model registry (`registry.json`). Used by register_model, promote_model, compare_experiments, and evaluate_model.
+
+**Functions:**
+
+| Function | Description |
+|----------|-------------|
+| `load_registry(s3_client, bucket, registry_key)` | Downloads `registry.json` from S3 or returns skeleton if not found |
+| `upload_registry(s3_client, bucket, registry_key, registry)` | Writes registry to temp file and uploads to S3 |
+
+No CLI. Imported by `utils/register_model.py`, `utils/promote_model.py`, `utils/compare_experiments.py`, `utils/evaluate_model.py`.
+
+---
+
 ### `utils/register_model.py`
 
-Registers a trained model to the S3-based model registry. Uploads the best checkpoint + config files from a Lightning experiment directory, creates lineage tracking for fine-tuned models, and manages `registry.json`. After registration, use `evaluate_model.py --register` to populate the evaluation field with metrics.
+Registers a trained model to the S3-based model registry. Uploads the best checkpoint + config files from a Lightning experiment directory, creates lineage tracking for fine-tuned models, and manages `registry.json`. Imports registry I/O from `src/model_registry.py`.
 
 **Key functions:**
 
-
-| Function                                       | Description                                                                |
-| ---------------------------------------------- | -------------------------------------------------------------------------- |
-| `find_best_checkpoint(checkpoints_dir)`         | Finds best checkpoint by metric value in filename (highest IoU/acc, lowest loss) |
-| `load_registry(s3_client, bucket, registry_key)` | Downloads `registry.json` from S3 or returns skeleton if not found        |
-| `upload_registry(s3_client, bucket, registry_key, registry)` | Writes registry to temp file and uploads to S3               |
+| Function | Description |
+|----------|-------------|
+| `find_best_checkpoint(checkpoints_dir)` | Finds best checkpoint by metric value in filename (highest IoU/acc, lowest loss) |
 
 
 **CLI arguments:**
