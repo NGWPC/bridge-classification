@@ -42,13 +42,12 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 
 from lightning.pytorch.loggers import TensorBoardLogger, CSVLogger
 
 try:
     from torchview import draw_graph
-    import spconv.pytorch as spconv
     HAS_TORCHVIEW = True
 except ImportError:
     HAS_TORCHVIEW = False
@@ -58,14 +57,9 @@ except ImportError:
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-try:
-    import pytorch_lightning as pl
-    from pytorch_lightning import LightningModule, LightningDataModule, Trainer
-    from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
-    HAS_LIGHTNING = True
-except ImportError:
-    HAS_LIGHTNING = False
-    print("Warning: pytorch_lightning not available. Training disabled.")
+import pytorch_lightning as pl
+from pytorch_lightning import LightningModule, LightningDataModule, Trainer
+from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 
 try:
     import matplotlib.pyplot as plt
@@ -78,479 +72,281 @@ except ImportError as e:
 # Import model
 from src.model import SparseUNet
 from src.constants import BRIDGE_DECK_MODEL_CLASS, CLASS_COLORS, CLASS_NAMES, NUM_CLASSES
-from src.voxelization import voxelize
-
-
-class BridgeDataset(Dataset):
-    """
-    Dataset for bridge point cloud classification with voxelization.
-
-    Handles HUC-organized directory structure and properly aggregates
-    points within voxels using majority vote for labels and averaging for features.
-    """
-
-    def __init__(self, data_dir: str, voxel_size: float = 0.1, augment: bool = False, augment_extra: bool = False, max_voxels: Optional[int] = None):
-        """
-        Args:
-            data_dir: Path to directory containing .npy files (can be HUC-organized)
-            voxel_size: Voxel size in meters (e.g., 0.1 for 10cm)
-            augment: Whether to apply random rotations/scaling
-            max_voxels: Maximum voxels per sample; randomly subsample if exceeded (default: None = no limit)
-        """
-        self.data_dir = Path(data_dir)
-        self.voxel_size = voxel_size
-        self.augment = augment
-        self.augment_extra = augment_extra
-        self.max_voxels = max_voxels
-
-        # Recursively find all .npy files (handles HUC folder structure)
-        self.files = sorted(list(self.data_dir.rglob("*.npy")))
-
-        if not self.files:
-            raise ValueError(f"No .npy files found in {data_dir}")
-
-        # Define the ignore label (Background/Unclassified)
-        self.ignore_label = 0
-
-        print(f"Found {len(self.files)} bridge files in {data_dir}")
-
-    def __len__(self) -> int:
-        return len(self.files)
-
-    def __getitem__(self, idx: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Load and voxelize a single bridge sample.
-
-        Returns:
-            Tuple of (discrete_coords, features, labels)
-            - discrete_coords: (N_voxels, 3) integer voxel coordinates
-            - features: (N_voxels, 1) averaged intensity per voxel
-            - labels: (N_voxels,) majority-vote labels per voxel
-        """
-        file_path = self.files[idx]
-
-        # 1. Load Data
-        data = np.load(file_path)  # Shape: (N, 5) -> [x, y, z, intensity, label]
-
-        # Split into components
-        xyz = data[:, 0:3]
-        feat = data[:, 3:4]  # Intensity is the only feature for now
-        labels = data[:, 4].astype(np.int64)
-
-        # Preprocessing centers data at the mean (e.g., -50 to +50).
-        # SpConv indices MUST be positive (0 to 100)?
-        # We shift the min value to 0.0 for every sample.
-        xyz -= xyz.min(axis=0)
-
-
-        # 2. Data Augmentation (Optional)
-        if self.augment:
-            # Random rotation around Z-axis
-            theta = np.random.uniform(0, 2 * np.pi)
-            rotation_matrix = np.array([
-                [np.cos(theta), -np.sin(theta), 0],
-                [np.sin(theta),  np.cos(theta), 0],
-                [0,              0,             1]
-            ])
-            xyz = xyz @ rotation_matrix
-
-            # Random jitter
-            jitter = np.random.normal(0, 0.01, size=xyz.shape)
-            xyz += jitter
-
-            # Re-shift to positive after rotation (rotation can make things negative again)
-            xyz -= xyz.min(axis=0)
-
-            if self.augment_extra:
-                # Random XY-flip
-                if np.random.random() > 0.5:
-                    xyz[:, 0] = -xyz[:, 0]
-                if np.random.random() > 0.5:
-                    xyz[:, 1] = -xyz[:, 1]
-
-                # Random scaling (0.9-1.1x)
-                scale = np.random.uniform(0.9, 1.1)
-                xyz *= scale
-
-                # Intensity jitter
-                feat = feat + np.random.normal(0, 0.02, size=feat.shape).astype(np.float32)
-                feat = np.clip(feat, 0.0, 1.0)
-
-                # Random point dropout (5-10%)
-                dropout_rate = np.random.uniform(0.05, 0.10)
-                keep_mask = np.random.random(len(xyz)) > dropout_rate
-                if keep_mask.sum() > 10:
-                    xyz = xyz[keep_mask]
-                    feat = feat[keep_mask]
-                    labels = labels[keep_mask]
-
-                # Re-shift to positive after flips/scaling
-                xyz -= xyz.min(axis=0)
-
-        # 3. Voxelization + feature/label aggregation
-        result = voxelize(xyz, self.voxel_size, feat, labels)
-        coords = result.unique_coords
-        features = result.voxel_features
-        agg_labels = result.voxel_labels
-
-        # 4. Subsample if voxel count exceeds max_voxels (prevents OOM on outlier bridges)
-        if self.max_voxels is not None and len(coords) > self.max_voxels:
-            indices = np.random.choice(len(coords), self.max_voxels, replace=False)
-            indices.sort()  # Preserve spatial ordering
-            coords = coords[indices]
-            features = features[indices]
-            agg_labels = agg_labels[indices]
-
-        return coords, features, agg_labels
-
-
-def sparse_collate_fn(batch: List[Tuple[np.ndarray, np.ndarray, np.ndarray]]) -> Dict[str, torch.Tensor]:
-    """
-    Custom collate function to create a batch for sparse tensor format.
-
-    Sparse tensors require coordinate format: [Batch_ID, X, Y, Z]
-
-    Args:
-        batch: List of (coords, features, labels) tuples
-
-    Returns:
-        Dictionary with keys:
-        - coordinates: (N_total, 4) tensor [batch_id, x, y, z]
-        - features: (N_total, 1) tensor
-        - labels: (N_total,) tensor
-    """
-    batch_coords = []
-    batch_feats = []
-    batch_labels = []
-    sample_voxel_counts = []
-
-    for batch_id, (coords, feats, labels) in enumerate(batch):
-        sample_voxel_counts.append(coords.shape[0])
-        # Append the Batch ID as the first column of the coordinates
-        # Shape becomes (N, 4): [Batch_ID, X, Y, Z]
-        b_idx = np.full((coords.shape[0], 1), batch_id, dtype=np.int32)
-        batched_c = np.hstack([b_idx, coords])
-
-        batch_coords.append(batched_c)
-        batch_feats.append(feats)
-        batch_labels.append(labels)
-
-    # Concatenate all lists into single big tensors
-    coords_tensor = torch.from_numpy(np.vstack(batch_coords)).int()
-    feats_tensor = torch.from_numpy(np.vstack(batch_feats)).float()
-    labels_tensor = torch.from_numpy(np.hstack(batch_labels)).long()
-
-    return {
-        "coordinates": coords_tensor,
-        "features": feats_tensor,
-        "labels": labels_tensor,
-        "sample_voxel_counts": sample_voxel_counts,
-    }
+from src.dataset import BridgeDataset, sparse_collate_fn
 
 
 # PyTorch Lightning Components
-if HAS_LIGHTNING:
-    import spconv.pytorch as spconv
+class DiceLoss(nn.Module):
+    """Per-class Dice loss averaged across classes. Directly optimizes overlap (IoU proxy)."""
 
-    class DiceLoss(nn.Module):
-        """Per-class Dice loss averaged across classes. Directly optimizes overlap (IoU proxy)."""
+    def __init__(self, num_classes=NUM_CLASSES, smooth=1.0):
+        super().__init__()
+        self.num_classes = num_classes
+        self.smooth = smooth
 
-        def __init__(self, num_classes=NUM_CLASSES, smooth=1.0):
-            super().__init__()
-            self.num_classes = num_classes
-            self.smooth = smooth
+    def forward(self, logits, targets):
+        probs = torch.softmax(logits, dim=1)
+        targets_onehot = torch.nn.functional.one_hot(targets, self.num_classes).float()
+        intersection = (probs * targets_onehot).sum(dim=0)
+        cardinality = probs.sum(dim=0) + targets_onehot.sum(dim=0)
+        dice_per_class = (2.0 * intersection + self.smooth) / (cardinality + self.smooth)
+        return 1.0 - dice_per_class.mean()
 
-        def forward(self, logits, targets):
-            probs = torch.softmax(logits, dim=1)
-            targets_onehot = torch.nn.functional.one_hot(targets, self.num_classes).float()
-            intersection = (probs * targets_onehot).sum(dim=0)
-            cardinality = probs.sum(dim=0) + targets_onehot.sum(dim=0)
-            dice_per_class = (2.0 * intersection + self.smooth) / (cardinality + self.smooth)
-            return 1.0 - dice_per_class.mean()
 
-    class BridgeLightningModule(LightningModule):
+class BridgeLightningModule(LightningModule):
+    """
+    PyTorch Lightning module for bridge classification training.
+    """
+
+    def __init__(
+        self,
+        input_channels=1,
+        num_classes=NUM_CLASSES,
+        base_channels=16,
+        learning_rate=0.001,
+        weight_decay=0.01,
+        class_weights=None,
+        monitor='val_loss',
+        monitor_mode='min',
+        use_dice_loss=False,
+    ):
         """
-        PyTorch Lightning module for bridge classification training.
+        Args:
+            input_channels: Number of input features (default: 1)
+            num_classes: Number of output classes (default: 4)
+            base_channels: Base number of channels (default: 16)
+            learning_rate: Learning rate for optimizer (default: 0.001)
+            weight_decay: Weight decay for optimizer (default: 0.01)
+            class_weights: Class weights for loss function (default: None)
+            monitor: Metric name for ReduceLROnPlateau (default: val_loss)
+            monitor_mode: 'min' or 'max' for ReduceLROnPlateau (default: min)
         """
+        super().__init__()
+        self.save_hyperparameters()
+        self.monitor = monitor
+        self.monitor_mode = monitor_mode
 
-        def __init__(
-            self,
-            input_channels=1,
-            num_classes=NUM_CLASSES,
-            base_channels=16,
-            learning_rate=0.001,
-            weight_decay=0.01,
-            class_weights=None,
-            monitor='val_loss',
-            monitor_mode='min',
-            use_dice_loss=False,
-        ):
-            """
-            Args:
-                input_channels: Number of input features (default: 1)
-                num_classes: Number of output classes (default: 4)
-                base_channels: Base number of channels (default: 16)
-                learning_rate: Learning rate for optimizer (default: 0.001)
-                weight_decay: Weight decay for optimizer (default: 0.01)
-                class_weights: Class weights for loss function (default: None)
-                monitor: Metric name for ReduceLROnPlateau (default: val_loss)
-                monitor_mode: 'min' or 'max' for ReduceLROnPlateau (default: min)
-            """
-            super().__init__()
-            self.save_hyperparameters()
-            self.monitor = monitor
-            self.monitor_mode = monitor_mode
+        self.model = SparseUNet(
+            input_channels=input_channels,
+            num_classes=num_classes,
+            base_channels=base_channels
+        )
 
-            self.model = SparseUNet(
-                input_channels=input_channels,
-                num_classes=num_classes,
-                base_channels=base_channels
+        self.learning_rate = learning_rate
+        self.weight_decay = weight_decay
+
+        # Default class weights: [Background, Ground/ Water, Bridge Deck, Obstacle]
+        # calculated weights from utils/calculate_weights.py
+        if class_weights is None:
+            # default training data weights
+            class_weights = [6.216962881360028, 1.4907158415241706, 0.36471562073348884, 2.3448372700679068]
+
+        self.register_buffer('class_weights', torch.tensor(class_weights, dtype=torch.float32))
+        self.criterion = nn.CrossEntropyLoss(weight=self.class_weights)
+        self.use_dice_loss = use_dice_loss
+        if use_dice_loss:
+            self.dice_criterion = DiceLoss(num_classes=num_classes)
+
+    def forward(self, x):
+        """Forward pass."""
+        return self.model(x)
+
+    def _common_step(self, batch, batch_idx, prefix):
+        """
+        Shared logic for train and validation.
+
+        Args:
+            batch: Batch dictionary containing coordinates, features, and labels
+            batch_idx: Index of batch
+            prefix: Prefix for logging (train or val)
+        """
+        import spconv.pytorch as spconv
+        coords = batch['coordinates']  # (N, 4) -> [BatchID, X, Y, Z]
+        feats = batch['features']      # (N, 1) -> Intensity
+        labels = batch['labels']       # (N,)
+
+        # Actual batch size (number of samples, not voxels) for Lightning logging
+        actual_batch_size = coords[:, 0].max().item() + 1
+
+        # Log voxel counts for diagnostics
+        num_voxels = coords.shape[0]
+        self.log(f'{prefix}_num_voxels', float(num_voxels), on_step=True, on_epoch=False, prog_bar=False, batch_size=actual_batch_size)
+        if 'sample_voxel_counts' in batch:
+            max_sample_voxels = max(batch['sample_voxel_counts'])
+            self.log(f'{prefix}_max_sample_voxels', float(max_sample_voxels), on_step=True, on_epoch=False, prog_bar=False, batch_size=actual_batch_size)
+
+        try:
+            # Dynamic Shape Calculation
+            # coords[:, 1:] gets X, Y, Z columns
+            max_coords = coords[:, 1:].max(dim=0)[0]
+            # limit = max_coords + 5
+            # Align to 32 if needed
+            # spatial_shape = ((limit + 31) // 32 * 32).int().tolist()
+
+            # Add small padding to be safe
+            spatial_shape = (max_coords + 10).int().tolist()
+
+            # Create SpConv Tensor
+            input_sp_tensor = spconv.SparseConvTensor(
+                features=feats,
+                indices=coords,
+                spatial_shape=spatial_shape,
+                batch_size=coords[:, 0].max().item() + 1
             )
 
-            self.learning_rate = learning_rate
-            self.weight_decay = weight_decay
+            # Forward pass
+            output = self.model(input_sp_tensor)  # (N, num_classes)
+            # Loss calculation
+            ce_loss = self.criterion(output, labels)
+            if self.use_dice_loss:
+                dice_loss = self.dice_criterion(output, labels)
+                loss = 0.5 * ce_loss + 0.5 * dice_loss
+            else:
+                loss = ce_loss
 
-            # Default class weights: [Background, Ground/ Water, Bridge Deck, Obstacle]
-            # calculated weights from utils/calculate_weights.py
-            if class_weights is None:
-                # default training data weights
-                class_weights = [6.216962881360028, 1.4907158415241706, 0.36471562073348884, 2.3448372700679068]
+            # Calculate Metrics
+            preds = torch.argmax(output, dim=1)
 
-            self.register_buffer('class_weights', torch.tensor(class_weights, dtype=torch.float32))
-            self.criterion = nn.CrossEntropyLoss(weight=self.class_weights)
-            self.use_dice_loss = use_dice_loss
-            if use_dice_loss:
-                self.dice_criterion = DiceLoss(num_classes=num_classes)
+            # --- METRICS FOR BRIDGE DECK (CLASS 2) ---
+            deck_target = (labels == BRIDGE_DECK_MODEL_CLASS)
+            deck_pred = (preds == BRIDGE_DECK_MODEL_CLASS)
 
-        def forward(self, x):
-            """Forward pass."""
-            return self.model(x)
+            # 1. Deck Recall (Accuracy on deck points)
+            # "Of the real deck points, how many did we find?"
+            deck_recall = 0.0
+            if deck_target.sum() > 0:
+                correct_deck = (preds[deck_target] == labels[deck_target]).sum().float()
+                deck_recall = (correct_deck / deck_target.sum().float()) * 100.0
 
-        def _common_step(self, batch, batch_idx, prefix):
-            """
-            Shared logic for train and validation.
+            # 2. Deck Precision
+            # "Of the points we called 'deck', how many were actually deck?"
+            deck_precision = 0.0
+            if deck_pred.sum() > 0:
+                true_positives = (deck_pred & deck_target).sum().float()
+                deck_precision = (true_positives / deck_pred.sum().float()) * 100.0
 
-            Args:
-                batch: Batch dictionary containing coordinates, features, and labels
-                batch_idx: Index of batch
-                prefix: Prefix for logging (train or val)
-            """
-            coords = batch['coordinates']  # (N, 4) -> [BatchID, X, Y, Z]
-            feats = batch['features']      # (N, 1) -> Intensity
-            labels = batch['labels']       # (N,)
+            # 3. Deck IoU (Intersection over Union)
+            # The gold standard for segmentation. Penalizes both false positives and false negatives.
+            deck_iou = 0.0
+            intersection = (deck_pred & deck_target).sum().float()
+            union = (deck_pred | deck_target).sum().float()
 
-            # Actual batch size (number of samples, not voxels) for Lightning logging
-            actual_batch_size = coords[:, 0].max().item() + 1
+            if union > 0:
+                deck_iou = (intersection / union) * 100.0
 
-            # Log voxel counts for diagnostics
-            num_voxels = coords.shape[0]
-            self.log(f'{prefix}_num_voxels', float(num_voxels), on_step=True, on_epoch=False, prog_bar=False, batch_size=actual_batch_size)
-            if 'sample_voxel_counts' in batch:
-                max_sample_voxels = max(batch['sample_voxel_counts'])
-                self.log(f'{prefix}_max_sample_voxels', float(max_sample_voxels), on_step=True, on_epoch=False, prog_bar=False, batch_size=actual_batch_size)
+            # 4. Overall Accuracy
+            overall_acc = (preds == labels).float().mean() * 100.0
 
+            # Logging (batch_size= tells Lightning the real sample count, not voxel count)
+            bs = actual_batch_size
+            # Loss (progress bar)
+            self.log(f'{prefix}_loss', loss, on_step=(prefix=='train'), on_epoch=True, prog_bar=True, batch_size=bs)
+
+            # Deck IoU (progress bar - this is most important metric)
+            self.log(f'{prefix}_deck_iou', deck_iou, on_step=(prefix=='train'), on_epoch=True, prog_bar=True, batch_size=bs)
+
+            # Detailed Metrics (logged but hidden from progress bar to keep it clean)
+            self.log(f'{prefix}_deck_recall', deck_recall, on_step=(prefix=='train'), on_epoch=True, prog_bar=False, batch_size=bs)
+            self.log(f'{prefix}_deck_precision', deck_precision, on_step=(prefix=='train'), on_epoch=True, prog_bar=False, batch_size=bs)
+            self.log(f'{prefix}_overall_acc', overall_acc, on_step=(prefix=='train'), on_epoch=True, prog_bar=False, batch_size=bs)
+
+            return loss
+
+        except torch.cuda.OutOfMemoryError:
+            print(
+                f"\n[OOM] CUDA out of memory at {prefix} batch {batch_idx}. "
+                f"Voxels in batch: {num_voxels:,}. Skipping batch."
+            )
+            torch.cuda.empty_cache()
+            return None
+
+    def training_step(self, batch, batch_idx):
+        """Training step."""
+        return self._common_step(batch, batch_idx, "train")
+
+    def validation_step(self, batch, batch_idx):
+        """Validation step."""
+        return self._common_step(batch, batch_idx, "val")
+
+    def configure_optimizers(self):
+        """Configure optimizer."""
+        optimizer = optim.AdamW(
+            filter(lambda p: p.requires_grad, self.parameters()),
+            lr=self.learning_rate,
+            weight_decay=self.weight_decay
+        )
+        # Add ReduceLROnPlateau
+        scheduler = {
+            'scheduler': optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, mode=self.monitor_mode, factor=0.5, patience=5, min_lr=1e-6
+            ),
+            'monitor': self.monitor,
+            'interval': 'epoch',
+            'frequency': 1
+        }
+        return [optimizer], [scheduler]
+
+
+class BridgeDataModule(LightningDataModule):
+    """
+    PyTorch Lightning data module for bridge dataset.
+    Uses train_dir and optionally val_dir, or val_split on train_dir when val_dir not set.
+    """
+
+    def __init__(
+        self,
+        train_dir: str,
+        val_dir: Optional[str] = None,
+        voxel_size: float = 0.1,
+        batch_size: int = 4,
+        num_workers: int = 4,
+        augment: bool = True,
+        augment_extra: bool = False,
+        val_split: float = 0.0,
+        max_voxels: Optional[int] = None,
+    ):
+        """
+        Args:
+            train_dir: Path to directory containing training .npy files
+            val_dir: Path to directory containing validation .npy files; if None, use val_split on train_dir
+            voxel_size: Voxel size in meters (default: 0.1)
+            batch_size: Batch size (default: 4)
+            num_workers: Number of data loader workers (default: 4)
+            augment: Whether to apply augmentation (default: True)
+            augment_extra: Whether to apply extra augmentation (default: False)
+            val_split: Validation split ratio when val_dir is not set (default: 0.0, no validation)
+            max_voxels: Maximum voxels per sample (default: None = no limit)
+        """
+        super().__init__()
+        self.train_dir = train_dir
+        self.val_dir = val_dir
+        self.voxel_size = voxel_size
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.augment = augment
+        self.augment_extra = augment_extra
+        self.val_split = val_split
+        self.max_voxels = max_voxels
+
+    def setup(self, stage=None):
+        """Setup datasets from train_dir and val_dir, or val_split on train_dir."""
+        if stage == 'fit' or stage is None:
             try:
-                # Dynamic Shape Calculation
-                # coords[:, 1:] gets X, Y, Z columns
-                max_coords = coords[:, 1:].max(dim=0)[0]
-                # limit = max_coords + 5
-                # # Align to 32 if needed
-                # spatial_shape = ((limit + 31) // 32 * 32).int().tolist()
-
-                # Add small padding to be safe
-                spatial_shape = (max_coords + 10).int().tolist()
-
-                # Create SpConv Tensor
-                input_sp_tensor = spconv.SparseConvTensor(
-                    features=feats,
-                    indices=coords,
-                    spatial_shape=spatial_shape,
-                    batch_size=coords[:, 0].max().item() + 1
+                full_dataset = BridgeDataset(
+                    self.train_dir,
+                    voxel_size=self.voxel_size,
+                    augment=False,
+                    max_voxels=self.max_voxels,
                 )
+            except ValueError as e:
+                raise ValueError(
+                    f"Training directory {self.train_dir!r} has no .npy files or does not exist. {e}"
+                ) from e
 
-                # Forward pass
-                output = self.model(input_sp_tensor)  # (N, num_classes)
-                # Loss calculation
-                ce_loss = self.criterion(output, labels)
-                if self.use_dice_loss:
-                    dice_loss = self.dice_criterion(output, labels)
-                    loss = 0.5 * ce_loss + 0.5 * dice_loss
-                else:
-                    loss = ce_loss
-
-                # Calculate Metrics
-                preds = torch.argmax(output, dim=1)
-
-                # --- METRICS FOR BRIDGE DECK (CLASS 2) ---
-                deck_target = (labels == BRIDGE_DECK_MODEL_CLASS)
-                deck_pred = (preds == BRIDGE_DECK_MODEL_CLASS)
-
-                # 1. Deck Recall (Accuracy on deck points)
-                # "Of the real deck points, how many did we find?"
-                deck_recall = 0.0
-                if deck_target.sum() > 0:
-                    correct_deck = (preds[deck_target] == labels[deck_target]).sum().float()
-                    deck_recall = (correct_deck / deck_target.sum().float()) * 100.0
-
-                # 2. Deck Precision
-                # "Of the points we called 'deck', how many were actually deck?"
-                deck_precision = 0.0
-                if deck_pred.sum() > 0:
-                    true_positives = (deck_pred & deck_target).sum().float()
-                    deck_precision = (true_positives / deck_pred.sum().float()) * 100.0
-
-                # 3. Deck IoU (Intersection over Union)
-                # The gold standard for segmentation. Penalizes both false positives and false negatives.
-                deck_iou = 0.0
-                intersection = (deck_pred & deck_target).sum().float()
-                union = (deck_pred | deck_target).sum().float()
-
-                if union > 0:
-                    deck_iou = (intersection / union) * 100.0
-
-                # 4. Overall Accuracy
-                overall_acc = (preds == labels).float().mean() * 100.0
-
-                # Logging (batch_size= tells Lightning the real sample count, not voxel count)
-                bs = actual_batch_size
-                # Loss (progress bar)
-                self.log(f'{prefix}_loss', loss, on_step=(prefix=='train'), on_epoch=True, prog_bar=True, batch_size=bs)
-
-                # Deck IoU (progress bar - this is most important metric)
-                self.log(f'{prefix}_deck_iou', deck_iou, on_step=(prefix=='train'), on_epoch=True, prog_bar=True, batch_size=bs)
-
-                # Detailed Metrics (logged but hidden from progress bar to keep it clean)
-                self.log(f'{prefix}_deck_recall', deck_recall, on_step=(prefix=='train'), on_epoch=True, prog_bar=False, batch_size=bs)
-                self.log(f'{prefix}_deck_precision', deck_precision, on_step=(prefix=='train'), on_epoch=True, prog_bar=False, batch_size=bs)
-                self.log(f'{prefix}_overall_acc', overall_acc, on_step=(prefix=='train'), on_epoch=True, prog_bar=False, batch_size=bs)
-
-                return loss
-
-            except torch.cuda.OutOfMemoryError:
-                print(
-                    f"\n[OOM] CUDA out of memory at {prefix} batch {batch_idx}. "
-                    f"Voxels in batch: {num_voxels:,}. Skipping batch."
-                )
-                torch.cuda.empty_cache()
-                return None
-
-        def training_step(self, batch, batch_idx):
-            """Training step."""
-            return self._common_step(batch, batch_idx, "train")
-
-        def validation_step(self, batch, batch_idx):
-            """Validation step."""
-            return self._common_step(batch, batch_idx, "val")
-
-        def configure_optimizers(self):
-            """Configure optimizer."""
-            optimizer = optim.AdamW(
-                filter(lambda p: p.requires_grad, self.parameters()),
-                lr=self.learning_rate,
-                weight_decay=self.weight_decay
-            )
-            # Add ReduceLROnPlateau
-            scheduler = {
-                'scheduler': optim.lr_scheduler.ReduceLROnPlateau(
-                    optimizer, mode=self.monitor_mode, factor=0.5, patience=5, min_lr=1e-6
-                ),
-                'monitor': self.monitor,
-                'interval': 'epoch',
-                'frequency': 1
-            }
-            return [optimizer], [scheduler]
-
-
-    class BridgeDataModule(LightningDataModule):
-        """
-        PyTorch Lightning data module for bridge dataset.
-        Uses train_dir and optionally val_dir, or val_split on train_dir when val_dir not set.
-        """
-
-        def __init__(
-            self,
-            train_dir: str,
-            val_dir: Optional[str] = None,
-            voxel_size: float = 0.1,
-            batch_size: int = 4,
-            num_workers: int = 4,
-            augment: bool = True,
-            augment_extra: bool = False,
-            val_split: float = 0.0,
-            max_voxels: Optional[int] = None,
-        ):
-            """
-            Args:
-                train_dir: Path to directory containing training .npy files
-                val_dir: Path to directory containing validation .npy files; if None, use val_split on train_dir
-                voxel_size: Voxel size in meters (default: 0.1)
-                batch_size: Batch size (default: 4)
-                num_workers: Number of data loader workers (default: 4)
-                augment: Whether to apply augmentation (default: True)
-                augment_extra: Whether to apply extra augmentation (default: False)
-                val_split: Validation split ratio when val_dir is not set (default: 0.0, no validation)
-                max_voxels: Maximum voxels per sample (default: None = no limit)
-            """
-            super().__init__()
-            self.train_dir = train_dir
-            self.val_dir = val_dir
-            self.voxel_size = voxel_size
-            self.batch_size = batch_size
-            self.num_workers = num_workers
-            self.augment = augment
-            self.augment_extra = augment_extra
-            self.val_split = val_split
-            self.max_voxels = max_voxels
-
-        def setup(self, stage=None):
-            """Setup datasets from train_dir and val_dir, or val_split on train_dir."""
-            if stage == 'fit' or stage is None:
-                try:
-                    full_dataset = BridgeDataset(
-                        self.train_dir,
-                        voxel_size=self.voxel_size,
-                        augment=False,
-                        max_voxels=self.max_voxels,
-                    )
-                except ValueError as e:
-                    raise ValueError(
-                        f"Training directory {self.train_dir!r} has no .npy files or does not exist. {e}"
-                    ) from e
-
-                # Explicit val_dir: use it if directory exists and has .npy files
-                if self.val_dir and os.path.isdir(self.val_dir):
-                    npy_files = list(Path(self.val_dir).rglob("*.npy"))
-                    if npy_files:
-                        self.train_dataset = BridgeDataset(
-                            self.train_dir,
-                            voxel_size=self.voxel_size,
-                            augment=self.augment,
-                            augment_extra=self.augment_extra,
-                            max_voxels=self.max_voxels,
-                        )
-                        self.val_dataset = BridgeDataset(
-                            self.val_dir,
-                            voxel_size=self.voxel_size,
-                            augment=False,
-                            max_voxels=self.max_voxels,
-                        )
-                    else:
-                        self.train_dataset = BridgeDataset(
-                            self.train_dir,
-                            voxel_size=self.voxel_size,
-                            augment=self.augment,
-                            augment_extra=self.augment_extra,
-                            max_voxels=self.max_voxels,
-                        )
-                        self.val_dataset = None
-                elif self.val_split > 0:
-                    # Split training directory into train/val by index
-                    dataset_size = len(full_dataset)
-                    val_size = int(dataset_size * self.val_split)
-                    train_size = dataset_size - val_size
-                    indices = torch.randperm(dataset_size).tolist()
-                    train_indices = indices[:train_size]
-                    val_indices = indices[train_size:]
+            # Explicit val_dir: use it if directory exists and has .npy files
+            if self.val_dir and os.path.isdir(self.val_dir):
+                npy_files = list(Path(self.val_dir).rglob("*.npy"))
+                if npy_files:
                     self.train_dataset = BridgeDataset(
                         self.train_dir,
                         voxel_size=self.voxel_size,
@@ -558,14 +354,12 @@ if HAS_LIGHTNING:
                         augment_extra=self.augment_extra,
                         max_voxels=self.max_voxels,
                     )
-                    self.train_dataset.files = [full_dataset.files[i] for i in train_indices]
                     self.val_dataset = BridgeDataset(
-                        self.train_dir,
+                        self.val_dir,
                         voxel_size=self.voxel_size,
                         augment=False,
                         max_voxels=self.max_voxels,
                     )
-                    self.val_dataset.files = [full_dataset.files[i] for i in val_indices]
                 else:
                     self.train_dataset = BridgeDataset(
                         self.train_dir,
@@ -575,36 +369,69 @@ if HAS_LIGHTNING:
                         max_voxels=self.max_voxels,
                     )
                     self.val_dataset = None
+            elif self.val_split > 0:
+                # Split training directory into train/val by index
+                dataset_size = len(full_dataset)
+                val_size = int(dataset_size * self.val_split)
+                train_size = dataset_size - val_size
+                indices = torch.randperm(dataset_size).tolist()
+                train_indices = indices[:train_size]
+                val_indices = indices[train_size:]
+                self.train_dataset = BridgeDataset(
+                    self.train_dir,
+                    voxel_size=self.voxel_size,
+                    augment=self.augment,
+                    augment_extra=self.augment_extra,
+                    max_voxels=self.max_voxels,
+                )
+                self.train_dataset.files = [full_dataset.files[i] for i in train_indices]
+                self.val_dataset = BridgeDataset(
+                    self.train_dir,
+                    voxel_size=self.voxel_size,
+                    augment=False,
+                    max_voxels=self.max_voxels,
+                )
+                self.val_dataset.files = [full_dataset.files[i] for i in val_indices]
+            else:
+                self.train_dataset = BridgeDataset(
+                    self.train_dir,
+                    voxel_size=self.voxel_size,
+                    augment=self.augment,
+                    augment_extra=self.augment_extra,
+                    max_voxels=self.max_voxels,
+                )
+                self.val_dataset = None
 
-        def train_dataloader(self):
-            """Create training dataloader."""
-            return DataLoader(
-                self.train_dataset,
-                batch_size=self.batch_size,
-                collate_fn=sparse_collate_fn,
-                shuffle=True,
-                num_workers=self.num_workers,
-                pin_memory=True
-            )
+    def train_dataloader(self):
+        """Create training dataloader."""
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.batch_size,
+            collate_fn=sparse_collate_fn,
+            shuffle=True,
+            num_workers=self.num_workers,
+            pin_memory=True
+        )
 
-        def val_dataloader(self):
-            """Create validation dataloader."""
-            if self.val_dataset is None:
-                return None
-            return DataLoader(
-                self.val_dataset,
-                batch_size=self.batch_size,
-                collate_fn=sparse_collate_fn,
-                shuffle=False,
-                num_workers=self.num_workers,
-                pin_memory=True
-            )
+    def val_dataloader(self):
+        """Create validation dataloader."""
+        if self.val_dataset is None:
+            return None
+        return DataLoader(
+            self.val_dataset,
+            batch_size=self.batch_size,
+            collate_fn=sparse_collate_fn,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True
+        )
 
 
 def save_network_graph(model, save_dir, filename="network_architecture"):
     """
     Traces the model on GPU (required for spconv) and saves the graph as PNG.
     """
+    import spconv.pytorch as spconv
     if not torch.cuda.is_available():
         print("CUDA not available. Skipping graph (spconv requires GPU for tracing).")
         return
@@ -783,8 +610,7 @@ def visualize_voxelization(data_dir: str, sample_idx: int = 0, voxel_size: float
 
 def main():
     """Main entry point with command-line argument parsing."""
-    if HAS_LIGHTNING:
-        pl.seed_everything(27, workers=True)
+    pl.seed_everything(27, workers=True)
 
     # Enable TF32 for float32 matmul on Ampere+ GPUs (A10G, A100, etc.)
     torch.set_float32_matmul_precision('medium')
@@ -1004,10 +830,6 @@ def main():
     print(f"Using args: {args}")
 
     if args.train:
-        if not HAS_LIGHTNING:
-            print("Pytorch Lightning not installed")
-            return
-
         train_dir = args.train_dir
         val_dir = args.val_dir
         class_weights_list: Optional[List[float]] = None

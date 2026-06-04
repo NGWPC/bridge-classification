@@ -280,29 +280,43 @@ Sparse 3D U-Net architecture using SpConv. No CLI — imported by `train.py` and
 
 ---
 
+### `src/dataset.py`
+
+Bridge point cloud dataset with on-the-fly voxelization. Pure PyTorch + numpy — no Lightning dependency. Importable by evaluation scripts, notebooks, and training.
+
+**Classes:**
+
+| Class | Description |
+|-------|-------------|
+| `BridgeDataset(data_dir, voxel_size, augment, augment_extra, max_voxels)` | PyTorch Dataset with on-the-fly voxelization. Recursively finds `.npy` files. Returns `(coords, features, labels)` tuples. |
+
+**Functions:**
+
+| Function | Description |
+|----------|-------------|
+| `sparse_collate_fn(batch)` | Custom collate: prepends batch ID to coordinates → `[batch_id, x, y, z]`. Returns dict with `coordinates`, `features`, `labels`, `sample_voxel_counts`. |
+
+No CLI. Imported by `train.py`.
+
+---
+
 ### `src/train.py`
 
-Training pipeline with voxelization, data loading, and PyTorch Lightning integration.
+PyTorch Lightning training pipeline. Imports `BridgeDataset` and `sparse_collate_fn` from `src/dataset.py`.
 
 **Key classes:**
 
-
-| Class                                                      | Description                                                                       |
-| ---------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `BridgeDataset(data_dir, voxel_size, augment, augment_extra, max_voxels)` | Dataset with on-the-fly voxelization. Recursively finds `.npy` files. |
-| `DiceLoss(num_classes, smooth)`                            | Per-class Dice loss averaged across classes. Directly optimizes IoU.              |
-| `BridgeLightningModule(...)`                               | Lightning module. CrossEntropyLoss (default) or combined Dice+CE loss (`--dice-loss`). Logs deck IoU/precision/recall. |
-| `BridgeDataModule(train_dir, val_dir, ...)`                | Lightning data module. Supports explicit `val_dir` or `val_split` on `train_dir`. |
-
+| Class | Description |
+|-------|-------------|
+| `DiceLoss(num_classes, smooth)` | Per-class Dice loss averaged across classes. Directly optimizes IoU. |
+| `BridgeLightningModule(...)` | Lightning module. CrossEntropyLoss (default) or combined Dice+CE loss (`--dice-loss`). Logs deck IoU/precision/recall. |
+| `BridgeDataModule(train_dir, val_dir, ...)` | Lightning data module. Supports explicit `val_dir` or `val_split` on `train_dir`. |
 
 **Key functions:**
 
-
-| Function                                                                  | Description                                                                                                         |
-| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `aggregate_voxel_points(xyz, features, labels, voxel_coords, voxel_size)` | Vectorized voxel aggregation: mean intensity + majority-vote labels. Returns `(agg_xyz, agg_features, agg_labels)`. |
-| `sparse_collate_fn(batch)`                                                | Custom collate: prepends batch ID to coordinates → `[batch_id, x, y, z]`. Returns dict.                             |
-| `visualize_voxelization(data_dir, sample_idx, voxel_size)`                | Matplotlib 3D plot: original vs voxelized point cloud side by side.                                                 |
+| Function | Description |
+|----------|-------------|
+| `visualize_voxelization(data_dir, sample_idx, voxel_size)` | Matplotlib 3D plot: original vs voxelized point cloud side by side. |
 
 
 **CLI arguments:**

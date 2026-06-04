@@ -60,7 +60,7 @@ The fix: sort by (X, Y, Z) to get a canonical order, then apply a seeded shuffle
 
 Mean aggregation is used for the intensity feature (continuous value), which is appropriate.
 
-**Source**: `src/train.py` — `aggregate_voxel_points` function
+**Source**: `src/voxelization.py` — `voxelize` function
 
 ---
 
@@ -72,7 +72,7 @@ Mean aggregation is used for the intensity feature (continuous value), which is 
 
 Additionally, the training loop catches `torch.cuda.OutOfMemoryError` per batch, clears the cache, and continues — providing a second layer of defense for the rare case where a batch still exceeds memory.
 
-**Source**: `src/train.py` — lines 235–241 (subsample), lines 442–448 (OOM handler)
+**Source**: `src/dataset.py` — `BridgeDataset.__getitem__` (subsample), `src/train.py` — `BridgeLightningModule._common_step` (OOM handler)
 
 ---
 
@@ -84,4 +84,4 @@ Additionally, the training loop catches `torch.cuda.OutOfMemoryError` per batch,
 
 Intensity encodes surface reflectance — useful for material discrimination (asphalt bridge deck vs. water vs. vegetation vs. metal guard rails). It is the only physically meaningful per-point scalar available consistently across USGS 3DEP datasets.
 
-**Source**: `src/train.py` — line 195 (`feat = data[:, 3:4]`), `src/model.py` line 93 (`input_channels=1`)
+**Source**: `src/dataset.py` — `BridgeDataset.__getitem__` (`feat = data[:, 3:4]`), `src/model.py` (`input_channels=1`)

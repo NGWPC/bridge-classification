@@ -242,11 +242,11 @@ Two `SubMConv3d` layers (maintains sparsity pattern) with a shortcut connection 
 
 ## Phase E: Training
 
-**Script**: `src/train.py`
+**Script**: `src/train.py` | **Data loading**: `src/dataset.py`
 
 ### Data Loading
 
-`BridgeDataset` performs on-the-fly voxelization:
+`BridgeDataset` (from `src/dataset.py`) performs on-the-fly voxelization:
 
 1. Load `.npy` → split into xyz, intensity, labels
 2. Shift `xyz -= xyz.min()` (guarantees non-negative SpConv indices)
