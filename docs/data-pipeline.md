@@ -157,18 +157,18 @@ Higher weight = rarer class (Background is rare near bridges; Deck is common).
 
 ## Step 4: Training
 
-**Script**: `src/train.py`
+**Script**: `src/train.py` | **Data loading**: `src/dataset.py`
 
 ```
 training/**/*.npy
-  → BridgeDataset.__getitem__
+  → BridgeDataset.__getitem__ (src/dataset.py)
     → load (N, 5) npy
     → shift xyz min to 0
     → [optional augmentation]
     → quantize: floor(xyz / voxel_size) → int32 coords
-    → aggregate_voxel_points: mean intensity + majority-vote labels
+    → voxelize: mean intensity + majority-vote labels
     → [optional max_voxels subsample]
-  → sparse_collate_fn
+  → sparse_collate_fn (src/dataset.py)
     → prepend batch_id → [batch_id, x, y, z]
   → SparseConvTensor
   → SparseUNet forward
