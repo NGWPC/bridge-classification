@@ -59,11 +59,9 @@ import pdal
 import json
 import os
 import sys
-import numpy as np
 import argparse
 import random
 import multiprocessing
-import logging
 import traceback
 from datetime import datetime
 from typing import List, Dict, Tuple, Optional, Any

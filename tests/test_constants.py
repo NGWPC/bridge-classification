@@ -44,6 +44,7 @@ class TestTimeoutMachinery:
 class TestTimeoutSentinel:
     def test_timeout_sentinel_written_and_skipped(self, tmp_path):
         """Once a timeout sentinel is written, timeout_sentinel_exists returns True."""
+        pytest.importorskip("geopandas")
         from src.download_and_weak_supervise_hucs import DataManager
         dm = DataManager(str(tmp_path / "source"), str(tmp_path / "silver"))
         assert not dm.timeout_sentinel_exists("huc01", "12345", "SomeSource_2020")
