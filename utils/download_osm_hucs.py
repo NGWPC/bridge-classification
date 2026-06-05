@@ -25,7 +25,7 @@ import geopandas as gpd
 from botocore.exceptions import ClientError
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from src.s3 import create_s3_client
+from src.s3_client import create_s3_client
 from src.gpkg_utils import write_gpkg
 
 # Suppress warnings for cleaner output

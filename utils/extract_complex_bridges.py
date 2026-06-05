@@ -111,7 +111,7 @@ def list_s3_source_keys(s3_uri, profile=None):
     Returns:
         set of (huc_id, osm_id, lidar_source) tuples found in S3
     """
-    from src.s3 import create_s3_client, parse_s3_uri
+    from src.s3_client import create_s3_client, parse_s3_uri
 
     s3_client = create_s3_client(profile=profile)
     bucket, prefix = parse_s3_uri(s3_uri)

@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.model_registry import load_registry, upload_registry
-from src.s3 import create_s3_client
+from src.s3_client import create_s3_client
 
 
 def main():

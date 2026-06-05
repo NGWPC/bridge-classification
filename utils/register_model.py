@@ -34,7 +34,7 @@ from pathlib import Path
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from src.s3 import create_s3_client, upload_file
+from src.s3_client import create_s3_client, upload_file
 from src.model_registry import load_registry, upload_registry
 
 

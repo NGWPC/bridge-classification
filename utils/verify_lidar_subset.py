@@ -26,7 +26,7 @@ from src.gpkg_utils import iter_huc_gpkgs
 # Optional S3 support
 try:
     from botocore.exceptions import ClientError
-    from src.s3 import create_s3_client
+    from src.s3_client import create_s3_client
     HAS_BOTO = True
 except ImportError:
     HAS_BOTO = False

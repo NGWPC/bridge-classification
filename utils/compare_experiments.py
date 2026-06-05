@@ -89,7 +89,7 @@ def main():
 
     if args.from_s3:
         from src.model_registry import load_registry
-        from src.s3 import create_s3_client
+        from src.s3_client import create_s3_client
         s3_client = create_s3_client(profile=args.profile)
         registry_key = f"{args.prefix}/registry.json"
         registry = load_registry(s3_client, args.bucket, registry_key)

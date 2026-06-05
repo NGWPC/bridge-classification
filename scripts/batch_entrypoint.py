@@ -30,10 +30,10 @@ from botocore.exceptions import ClientError
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from src.constants import BridgeTimeout, MIN_POINT_COUNT, bridge_timeout_guard
 from src.inference import load_model, run_inference
-from src.s3 import (
-    create_s3_client, download_file, object_exists, parse_s3_uri,
-    resolve_input_key, resolve_output_keys, upload_file,
+from src.s3_client import (
+    create_s3_client, download_file, object_exists, parse_s3_uri, upload_file,
 )
+from src.s3_paths import resolve_input_key, resolve_output_keys
 
 
 def log(msg, child_index=None, bridge_id=None):

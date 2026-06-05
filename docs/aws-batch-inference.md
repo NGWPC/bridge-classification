@@ -16,7 +16,8 @@ Each array child downloads the manifest and model, computes its chunk, then proc
 | `scripts/submit_batch_job.py`        | Submit single or array batch jobs                                  |
 | `scripts/batch_entrypoint.py`        | Container entrypoint — per-bridge processing loop                  |
 | `scripts/audit_outputs.py`           | Post-run verification — checks all expected outputs exist in S3    |
-| `src/s3.py`                          | Shared S3 utilities (parse URIs, download/upload, path resolution) |
+| `src/s3_client.py`                   | Generic S3 utilities (parse URIs, download/upload)                 |
+| `src/s3_paths.py`                    | Bridge-specific S3 path resolution (manifest → S3 keys)           |
 
 
 ---
