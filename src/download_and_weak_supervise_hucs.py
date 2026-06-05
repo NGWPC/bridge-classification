@@ -62,6 +62,7 @@ import sys
 import argparse
 import random
 import multiprocessing
+import multiprocessing.pool
 import traceback
 from datetime import datetime
 from typing import List, Dict, Tuple, Optional, Any
@@ -251,6 +252,35 @@ class DataManager:
         except Exception as e:
             print(f"Error saving source for {osmid}/{source_name}: {e}")
             return False
+
+
+# --- Non-daemonic pool (allows workers to spawn child subprocesses) ---
+# Standard Pool workers are daemonic and cannot create children.
+# We need non-daemonic workers so each can spawn a subprocess for
+# timeout enforcement (see _run_bridge_in_subprocess).
+_spawn_ctx = multiprocessing.get_context('spawn')
+
+
+class _NoDaemonProcess(_spawn_ctx.Process):
+    """Spawn process that reports as non-daemonic so it can create children."""
+    @property
+    def daemon(self):
+        return False
+
+    @daemon.setter
+    def daemon(self, value):
+        pass
+
+
+class _NoDaemonContext(type(_spawn_ctx)):
+    Process = _NoDaemonProcess
+
+
+class _NoDaemonPool(multiprocessing.pool.Pool):
+    """Pool with non-daemonic spawn workers that can create child subprocesses."""
+    def __init__(self, *args, **kwargs):
+        kwargs['context'] = _NoDaemonContext()
+        super().__init__(*args, **kwargs)
 
 
 def _bridge_subprocess_target(
@@ -659,7 +689,7 @@ class BridgeProcessor:
 
         # Process tasks in parallel; log each result as soon as it completes
         results = []
-        with multiprocessing.Pool(processes=self.num_workers, maxtasksperchild=50) as pool:
+        with _NoDaemonPool(processes=self.num_workers, maxtasksperchild=50) as pool:
             # iterator = pool.imap(process_bridge_source, tasks)
             iterator = pool.imap_unordered(process_bridge_source, tasks)
             if show_progress and HAS_TQDM:
