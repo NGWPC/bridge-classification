@@ -1,3 +1,10 @@
+"""Verify RANSAC reproducibility across platforms.
+
+Generates a synthetic bridge plane with noise and outliers, runs RANSAC,
+and prints coefficients + inlier count. Used to confirm deterministic
+ordering produces identical results on Mac vs Linux (Ubuntu EC2).
+"""
+
 import numpy as np
 from sklearn.linear_model import RANSACRegressor
 import sys
