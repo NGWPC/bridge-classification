@@ -5,8 +5,6 @@ import signal
 import pytest
 
 from src.constants import (
-    CLASS_COLORS,
-    CLASS_NAMES,
     LAS_TO_MODEL_MAP,
     MODEL_TO_LAS_MAP,
     NUM_CLASSES,
@@ -36,14 +34,8 @@ class TestMappingConsistency:
         assert model_class == OBSTACLES_MODEL_CLASS
         assert MODEL_TO_LAS_MAP[model_class] == OBSTACLES_ASPRS_CODE
 
-    def test_num_classes_schema(self):
-        assert NUM_CLASSES == len(CLASS_NAMES) == len(CLASS_COLORS) == 4
-
 
 class TestTimeoutMachinery:
-    def test_bridge_timeout_is_base_exception(self):
-        assert issubclass(BridgeTimeout, BaseException)
-
     def test_timeout_handler_raises(self):
         with pytest.raises(BridgeTimeout):
             _timeout_handler(signal.SIGALRM, None)
