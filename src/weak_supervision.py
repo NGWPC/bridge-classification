@@ -6,6 +6,7 @@ and Z-distance heuristic labeling.
 """
 
 import json
+from enum import Enum
 
 import numpy as np
 import pdal
@@ -16,6 +17,24 @@ from sklearn.linear_model import RANSACRegressor, LinearRegression
 from sklearn.decomposition import PCA
 from scipy.spatial import ConvexHull
 from matplotlib.path import Path as MatplotlibPath
+
+
+class FailureReason(Enum):
+    """Why a bridge failed weak supervision.
+
+    Most values are set by process_bridge() itself. TIMEOUT is set by the
+    caller's subprocess wrapper — included here so the consumer can dispatch
+    on all failure reasons with a single enum.
+    """
+    NO_POINTS = "no_points"
+    RANSAC_INSUFFICIENT = "ransac_insufficient"
+    RANSAC_FAILED = "ransac_failed"
+    RANSAC_LOW_INLIERS = "ransac_low_inliers"
+    HULL_FAILED = "hull_failed"
+    HIGH_RMSE = "high_rmse"
+    CURVED = "curved"
+    EXCEPTION = "exception"
+    TIMEOUT = "timeout"
 
 
 @dataclass
@@ -329,6 +348,7 @@ def process_bridge(
         if count == 0:
             return {
                 'success': False,
+                'reason': FailureReason.NO_POINTS,
                 'error': 'No points found in lidar data for this bridge geometry'
             }
 
@@ -364,6 +384,7 @@ def process_bridge(
         if count == 0:
             return {
                 'success': False,
+                'reason': FailureReason.NO_POINTS,
                 'error': 'No points found in lidar data for this bridge geometry',
                 'original_arrays': original_arrays
             }

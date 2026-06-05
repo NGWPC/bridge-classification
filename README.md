@@ -131,7 +131,7 @@ docker compose run --rm bridge-classifier \
 #   --silver-dir ./data/runs/my-run-name/silver_training
 
 # Step 1: Download & Weak Supervision
-# --skip-existing skips already processed outputs and bridges that previously had no lidar points (count==0).
+# --skip-existing skips already processed outputs, bridges with no lidar points (count==0), and bridges that timed out.
 docker compose run --rm bridge-classifier \
   python src/download_and_weak_supervise_hucs.py \
   --source-dir ./data/ml-data/source \

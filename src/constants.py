@@ -88,6 +88,12 @@ def _timeout_handler(signum, frame):
 def bridge_timeout_guard(seconds):
     """SIGALRM-based wall-clock timeout. Raises BridgeTimeout after `seconds`.
 
+    Note: SIGALRM is delivered but the Python handler only fires when the
+    bytecode eval loop runs. This CANNOT interrupt blocking C extensions
+    (e.g. PDAL network reads). For C-blocking code, use subprocess-based
+    timeout with Process.terminate() instead — see
+    ``_run_bridge_in_subprocess`` in ``download_and_weak_supervise_hucs.py``.
+
     Usage:
         try:
             with bridge_timeout_guard(300):

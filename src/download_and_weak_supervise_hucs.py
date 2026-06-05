@@ -77,8 +77,7 @@ from src.lidar_utils import (
     safe_source_name as _safe_name,
 )
 from src.gpkg_utils import read_bridge_gpkg, filter_by_ids, iter_huc_gpkgs, DEFAULT_GPKG_TEMPLATE
-from src.weak_supervision import BridgeProcessingConfig, process_bridge
-from src.constants import BridgeTimeout, bridge_timeout_guard
+from src.weak_supervision import BridgeProcessingConfig, process_bridge, FailureReason
 
 try:
     from tqdm import tqdm
@@ -166,6 +165,21 @@ class DataManager:
         path = self.no_points_sentinel_path(huc_id, osmid, source_name)
         path.write_text("# No points found in lidar data for this bridge geometry\n")
 
+    def timeout_sentinel_path(self, huc_id: str, osmid: str, source_name: str) -> Path:
+        """Path to sentinel file indicating this bridge timed out during processing."""
+        safe_name = _safe_name(source_name)
+        return self.source_dir / huc_id / f"bridge_{osmid}_{safe_name}.timeout"
+
+    def timeout_sentinel_exists(self, huc_id: str, osmid: str, source_name: str) -> bool:
+        """Check if a timeout sentinel exists (skip on restart with --skip-existing)."""
+        return self.timeout_sentinel_path(huc_id, osmid, source_name).exists()
+
+    def write_timeout_sentinel(self, huc_id: str, osmid: str, source_name: str) -> None:
+        """Write sentinel so this timed-out bridge is skipped on restart with --skip-existing."""
+        self.ensure_directories(huc_id)
+        path = self.timeout_sentinel_path(huc_id, osmid, source_name)
+        path.write_text("# Bridge timed out during processing\n")
+
     def save_files(self, original_arrays: Any, modified_arrays: Any, huc_id: str, osmid: str, source_name: str, config: BridgeProcessingConfig) -> bool:
         """
         Save both source and silver training files.
@@ -241,6 +255,83 @@ class DataManager:
             return False
 
 
+def _bridge_subprocess_target(
+    result_queue: multiprocessing.Queue,
+    source_url: str,
+    geometry_wkt: str,
+    config_dict: Dict[str, Any],
+    buffer_meters: float,
+) -> None:
+    """Run process_bridge in a child process and put the result on the queue.
+
+    Deserializes WKT geometry and config dict, then calls process_bridge.
+    Called as the target of multiprocessing.Process — never called directly.
+    """
+    from shapely import wkt
+    config = BridgeProcessingConfig.from_dict(config_dict)
+    geometry = wkt.loads(geometry_wkt)
+    try:
+        result = process_bridge(source_url, geometry, config, buffer_meters)
+        result_queue.put(result)
+    except Exception as e:
+        result_queue.put({'success': False, 'reason': FailureReason.EXCEPTION,
+                          'error': f'Subprocess exception: {e}'})
+
+
+def _run_bridge_in_subprocess(
+    source_url: str,
+    geometry_wkt: str,
+    config: BridgeProcessingConfig,
+    buffer_meters: float,
+    timeout: float,
+) -> Dict[str, Any]:
+    """Run process_bridge in a child process with wall-clock timeout.
+
+    This creates a process-inside-a-process: the caller (a Pool worker)
+    spawns a short-lived child for one bridge. The Pool provides parallelism
+    (N bridges at once); this subprocess provides killability (SIGTERM can
+    terminate PDAL's C code, which SIGALRM cannot). The Pool worker always
+    recovers via ``p.join(timeout)`` — its slot is never lost to a hang.
+
+    Args:
+        source_url: EPT URL for the lidar source.
+        geometry_wkt: WKT string of the bridge geometry (passed through
+            from the task tuple — avoids re-serializing a Shapely object).
+        config: BridgeProcessingConfig with all parameters.
+        buffer_meters: Buffer size in meters.
+        timeout: Wall-clock seconds before the subprocess is killed.
+
+    Returns:
+        Result dict from process_bridge, or a failure dict with
+        reason=TIMEOUT if the subprocess was killed.
+    """
+    q: multiprocessing.Queue = multiprocessing.Queue(maxsize=1)
+    p = multiprocessing.Process(
+        target=_bridge_subprocess_target,
+        args=(q, source_url, geometry_wkt, config.to_dict(), buffer_meters),
+    )
+    p.start()
+    p.join(timeout=timeout)
+
+    if p.is_alive():
+        p.terminate()
+        p.join(5)
+        if p.is_alive():
+            p.kill()
+            p.join()
+        return {'success': False, 'reason': FailureReason.TIMEOUT,
+                'error': f'Timeout after {timeout}s (killed)'}
+
+    if q.empty():
+        return {'success': False, 'reason': FailureReason.EXCEPTION,
+                'error': 'Subprocess exited without result'}
+    try:
+        return q.get_nowait()
+    except Exception:
+        return {'success': False, 'reason': FailureReason.EXCEPTION,
+                'error': 'Failed to read result from subprocess'}
+
+
 def process_bridge_source(args: TaskTuple) -> Dict[str, Any]:
     """
     Process a single (bridge, source) pair.
@@ -262,15 +353,13 @@ def process_bridge_source(args: TaskTuple) -> Dict[str, Any]:
         # Reconstruct config from dict
         config = BridgeProcessingConfig.from_dict(config_dict)
 
-        # Reconstruct geometry from WKT
-        from shapely import wkt
-        bridge_geometry = wkt.loads(bridge_geometry_wkt)
-
         # Initialize data manager
         data_manager = DataManager(source_dir, silver_dir)
 
-        # Check if already processed
-        if data_manager.file_exists(huc_id, osmid, source_name):
+        # Check if already processed (or known-empty/timed-out)
+        if (data_manager.file_exists(huc_id, osmid, source_name)
+                or data_manager.no_points_sentinel_exists(huc_id, osmid, source_name)
+                or data_manager.timeout_sentinel_exists(huc_id, osmid, source_name)):
             return {
                 'success': True,
                 'huc_id': huc_id,
@@ -285,26 +374,26 @@ def process_bridge_source(args: TaskTuple) -> Dict[str, Any]:
         if logger:
             logger.info(f"[Task start] huc_id={huc_id} osmid={osmid} source_name={source_name}")
 
-        # Process with weak supervision (with per-bridge timeout)
-        try:
-            with bridge_timeout_guard(config.bridge_timeout):
-                result = process_bridge(source_url, bridge_geometry, config, buffer_meters)
-        except BridgeTimeout:
+        # Process with weak supervision (subprocess timeout kills PDAL if it hangs)
+        result = _run_bridge_in_subprocess(
+            source_url, bridge_geometry_wkt, config, buffer_meters, config.bridge_timeout)
+
+        if result and result.get('reason') == FailureReason.TIMEOUT:
             print(f"TIMEOUT: bridge={osmid} source={source_name} exceeded {config.bridge_timeout}s, skipping", flush=True)
             if logger:
                 logger.error(f"[{huc_id}] TIMEOUT: OSM ID {osmid} / Source {source_name} exceeded {config.bridge_timeout}s")
-            result = {'success': False, 'error': f'Timeout after {config.bridge_timeout}s'}
 
         if result is None or not result.get('success', False):
             error_msg = result.get('error', 'Unknown processing error') if result else 'Processing returned None'
+            reason = result.get('reason') if result else None
             if result is not None and 'original_arrays' in result:
                 data_manager.save_source_only(
                     result['original_arrays'], huc_id, osmid, source_name, config
                 )
-            else:
-                # No file saved (e.g. count==0 from EPT read). Write sentinel so --skip-existing skips on restart.
-                if result is not None and error_msg == 'No points found in lidar data for this bridge geometry':
-                    data_manager.write_no_points_sentinel(huc_id, osmid, source_name)
+            elif reason == FailureReason.NO_POINTS:
+                data_manager.write_no_points_sentinel(huc_id, osmid, source_name)
+            elif reason == FailureReason.TIMEOUT:
+                data_manager.write_timeout_sentinel(huc_id, osmid, source_name)
             return {
                 'success': False,
                 'huc_id': huc_id,
@@ -531,7 +620,9 @@ class BridgeProcessor:
 
             for task in tasks:
                 huc_id, osmid, _, _, source_name, _, _, _, _ = task
-                if data_manager.file_exists(huc_id, osmid, source_name) or data_manager.no_points_sentinel_exists(huc_id, osmid, source_name):
+                if (data_manager.file_exists(huc_id, osmid, source_name)
+                        or data_manager.no_points_sentinel_exists(huc_id, osmid, source_name)
+                        or data_manager.timeout_sentinel_exists(huc_id, osmid, source_name)):
                     skipped_count += 1
                 else:
                     filtered_tasks.append(task)
