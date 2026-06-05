@@ -7,20 +7,14 @@ from utils.calculate_weights import _load_one_json, compute_weights
 
 
 class TestComputeWeights:
-    def test_known_distribution(self):
-        """W_c = total / (n_classes * count_c)."""
-        counts = {0: 100, 1: 100, 2: 100, 3: 100}
+    def test_imbalanced_distribution(self):
+        """Rare classes get higher weights. W_c = total / (n_classes * count_c)."""
+        counts = {0: 1000, 1: 100, 2: 50, 3: 10}
         weights = compute_weights(counts, n_classes=4)
         assert len(weights) == 4
-        for w in weights:
-            assert w == pytest.approx(1.0, abs=1e-6)
-
-    def test_single_class(self):
-        """Single class -> weight = total / (n_classes * count) = 1.0 when n_classes=1."""
-        counts = {0: 500}
-        weights = compute_weights(counts, n_classes=1)
-        assert len(weights) == 1
-        assert weights[0] == pytest.approx(1.0, abs=1e-6)
+        assert weights[0] < weights[1] < weights[2] < weights[3]
+        # class 2 has 20x fewer points than class 0 → 20x higher weight
+        assert weights[2] / weights[0] == pytest.approx(20.0, abs=0.1)
 
 
 class TestLoadOneJson:

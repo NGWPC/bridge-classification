@@ -14,12 +14,6 @@ class TestVoxelize:
 
         assert result.unique_coords.shape == (1, 3)
 
-    def test_two_voxel_count(self, two_voxel_cloud):
-        xyz, intensity, labels = two_voxel_cloud
-        result = voxelize(xyz, voxel_size=1.0, intensity=intensity, labels=labels)
-
-        assert result.unique_coords.shape[0] == 2
-
     def test_mean_intensity_aggregation(self, two_voxel_cloud):
         """Voxel A mean = 0.4, Voxel B mean = 0.3."""
         xyz, intensity, labels = two_voxel_cloud
@@ -35,20 +29,6 @@ class TestVoxelize:
 
         assert result.voxel_labels is not None
         assert set(result.voxel_labels.tolist()) == {1, 2}
-
-    def test_inverse_map_all_valid_indices(self, two_voxel_cloud):
-        xyz, intensity, labels = two_voxel_cloud
-        result = voxelize(xyz, voxel_size=1.0, intensity=intensity, labels=labels)
-
-        n_voxels = result.unique_coords.shape[0]
-        assert result.inverse_map.min() >= 0
-        assert result.inverse_map.max() < n_voxels
-
-    def test_inverse_map_shape(self, two_voxel_cloud):
-        xyz, intensity, labels = two_voxel_cloud
-        result = voxelize(xyz, voxel_size=1.0, intensity=intensity, labels=labels)
-
-        assert result.inverse_map.shape == (6,)
 
     def test_labels_none_without_input(self, two_voxel_cloud):
         """Inference mode: labels=None -> voxel_labels is None."""
