@@ -37,10 +37,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Add project root to path so we can import from src/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from src.s3 import (
-    create_s3_client, object_exists, resolve_extension, resolve_output_keys,
-    stream_manifest_lines,
-)
+from src.s3_client import create_s3_client, object_exists, stream_manifest_lines
+from src.s3_paths import resolve_extension, resolve_output_keys
 
 DEFAULT_WORKERS = 200
 

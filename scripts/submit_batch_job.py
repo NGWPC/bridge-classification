@@ -33,7 +33,7 @@ import boto3
 
 # Add project root to path so we can import from src/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from src.s3 import create_s3_client, stream_manifest_lines
+from src.s3_client import create_s3_client, stream_manifest_lines
 
 MAX_ARRAY_SIZE = 10_000  # AWS Batch hard limit
 DEFAULT_CHUNK_TARGET = 60

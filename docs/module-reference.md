@@ -424,32 +424,44 @@ python src/inference.py \
 
 ---
 
-### `src/s3.py`
+### `src/s3_client.py`
 
-Shared S3 utilities used by all batch scripts. Generic S3 operations and bridge-specific path conventions.
-
-**Constants:**
-
-
-| Constant           | Description                                                                |
-| ------------------ | -------------------------------------------------------------------------- |
-| `PROBE_EXTENSIONS` | `['.laz', '.las']` — extensions to try when manifest line has no extension |
-
+Generic S3 operations — reusable across any S3 project. No bridge-specific knowledge.
 
 **Functions:**
 
+| Function | Description |
+|----------|-------------|
+| `create_s3_client(profile=None)` | Create a boto3 S3 client with adaptive retry (`AWS_MAX_RETRIES` attempts) |
+| `parse_s3_uri(uri)` | Split `s3://bucket/key` into `(bucket, key)` tuple |
+| `object_exists(s3_client, bucket, key)` | Check if S3 object exists via `head_object` (returns bool) |
+| `download_file(s3_client, bucket, key, local_path)` | Download S3 object, creating parent dirs as needed |
+| `upload_file(s3_client, local_path, bucket, key)` | Upload local file to S3 |
+| `stream_manifest_lines(s3_client, manifest_uri)` | Generator yielding non-empty stripped lines from an S3 text file |
 
-| Function                                                            | Description                                                                                    |
-| ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `create_s3_client(profile=None)`                                    | Create a boto3 S3 client with adaptive retry (`AWS_MAX_RETRIES` attempts)                      |
-| `parse_s3_uri(uri)`                                                 | Split `s3://bucket/key` into `(bucket, key)` tuple                                             |
-| `object_exists(s3_client, bucket, key)`                             | Check if S3 object exists via `head_object` (returns bool)                                     |
-| `download_file(s3_client, bucket, key, local_path)`                 | Download S3 object, creating parent dirs as needed                                             |
-| `upload_file(s3_client, local_path, bucket, key)`                   | Upload local file to S3                                                                        |
-| `stream_manifest_lines(s3_client, manifest_uri)`                    | Generator yielding non-empty stripped lines from an S3 manifest                                |
-| `resolve_input_key(s3_client, bucket, input_prefix, manifest_line)` | Resolve manifest line to full S3 key, probing extensions if needed                             |
-| `resolve_extension(s3_client, bucket, input_prefix, manifest_line)` | Determine file extension by probing S3 (falls back to `.laz`)                                  |
-| `resolve_output_keys(output_prefix, manifest_line, ext, mode)`      | Compute expected output S3 key(s) by mode. Returns dict with `primary` and optionally `masked` |
+No CLI. Imported by model_registry, register_model, promote_model, evaluate_model, batch_entrypoint, and others.
+
+---
+
+### `src/s3_paths.py`
+
+Bridge-specific S3 path conventions for inference I/O. Resolves manifest lines to full S3 keys by probing extensions, and computes output key naming by inference mode.
+
+**Constants:**
+
+| Constant | Description |
+|----------|-------------|
+| `PROBE_EXTENSIONS` | `['.laz', '.las']` — extensions to try when manifest line has no extension |
+
+**Functions:**
+
+| Function | Description |
+|----------|-------------|
+| `resolve_input_key(s3_client, bucket, input_prefix, manifest_line)` | Resolve manifest line to full S3 key, probing extensions if needed |
+| `resolve_extension(s3_client, bucket, input_prefix, manifest_line)` | Determine file extension by probing S3 (falls back to `.laz`) |
+| `resolve_output_keys(output_prefix, manifest_line, ext, mode)` | Compute expected output S3 key(s) by mode. Returns dict with `primary` and optionally `masked` |
+
+No CLI. Imported by batch_entrypoint, audit_outputs.
 
 
 ---

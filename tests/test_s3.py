@@ -1,10 +1,11 @@
-"""Tests for src/s3.py — URI parsing and output key resolution."""
+"""Tests for S3 utilities — URI parsing and output key resolution."""
 
 import pytest
 from unittest.mock import MagicMock
 from botocore.exceptions import ClientError
 
-from src.s3 import parse_s3_uri, resolve_input_key, resolve_output_keys
+from src.s3_client import parse_s3_uri
+from src.s3_paths import resolve_input_key, resolve_output_keys
 
 
 class TestParseS3Uri:
