@@ -37,7 +37,7 @@ Shared constants and lightweight utilities. Zero heavy dependencies (no torch, s
 | Name | Description |
 |------|-------------|
 | `BridgeTimeout` | Exception raised when a bridge exceeds the per-bridge wall-clock timeout |
-| `bridge_timeout_guard(seconds)` | Context manager: sets SIGALRM timer, yields, cleans up. Raises `BridgeTimeout` on expiry. |
+| `bridge_timeout_guard(seconds)` | Context manager: sets SIGALRM timer, yields, cleans up. Raises `BridgeTimeout` on expiry. Cannot interrupt blocking C extensions (e.g. PDAL). |
 
 
 No CLI. Imported by `inference.py`, `train.py`, `preprocess_bridges.py`, `evaluate_model.py`, `batch_entrypoint.py`, `s3_client.py`.
@@ -164,6 +164,7 @@ Core weak supervision algorithm for bridge LiDAR classification. RANSAC plane fi
 
 | Class | Description |
 |-------|-------------|
+| `FailureReason` | Enum: why a bridge failed weak supervision (`NO_POINTS`, `RANSAC_INSUFFICIENT`, `RANSAC_FAILED`, `RANSAC_LOW_INLIERS`, `HULL_FAILED`, `HIGH_RMSE`, `CURVED`, `EXCEPTION`, `TIMEOUT`). |
 | `BridgeProcessingConfig` | Dataclass with all pipeline parameters (PDAL settings, RANSAC thresholds, linearity thresholds, classification Z-ranges). Supports `from_dict()`/`to_dict()` for multiprocessing serialization. |
 
 **Functions:**
@@ -194,7 +195,7 @@ Full HUC-based pipeline for downloading USGS LiDAR and generating weakly-supervi
 
 | Function | Description |
 |----------|-------------|
-| `process_bridge_source(task_tuple)` | Multiprocessing worker: calls `process_bridge()` and writes source + silver LAZ files. |
+| `process_bridge_source(task_tuple)` | Multiprocessing worker: calls `process_bridge()` via subprocess timeout and writes source + silver LAZ files. Writes `.timeout` sentinel for hung bridges. |
 | `main()` | CLI entry point. |
 
 

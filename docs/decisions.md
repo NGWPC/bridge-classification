@@ -85,3 +85,15 @@ Additionally, the training loop catches `torch.cuda.OutOfMemoryError` per batch,
 Intensity encodes surface reflectance — useful for material discrimination (asphalt bridge deck vs. water vs. vegetation vs. metal guard rails). It is the only physically meaningful per-point scalar available consistently across USGS 3DEP datasets.
 
 **Source**: `src/dataset.py` — `BridgeDataset.__getitem__` (`feat = data[:, 3:4]`), `src/model.py` (`input_channels=1`)
+
+---
+
+## 8. Subprocess Timeout for Weak Supervision (not SIGALRM)
+
+**Choice**: Use `multiprocessing.Process` with `join(timeout)` + `terminate()` for per-bridge timeout in weak supervision. Keep SIGALRM-based `bridge_timeout_guard()` for inference/batch/evaluation.
+
+**Reasoning**: SIGALRM sets a flag that Python checks between bytecode instructions. When PDAL blocks in C code doing EPT network reads, the bytecode eval loop isn't running — the flag is never checked and the timeout never fires. `Process.terminate()` sends SIGTERM at the OS level, killing the C code regardless.
+
+**Trade-off**: Each bridge spawns a child process (~200ms overhead), but this is negligible vs. PDAL download time. The Pool provides parallelism (N workers); the subprocess provides killability. Inference uses local file reads + GPU ops that return to the eval loop between steps, so SIGALRM works there.
+
+**Source**: `src/download_and_weak_supervise_hucs.py` — `_run_bridge_in_subprocess()`, `_bridge_subprocess_target()`
