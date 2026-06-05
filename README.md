@@ -113,7 +113,7 @@ docker build --platform linux/amd64 -t bridge-classifier .
 
 **Run the Pipeline**:
 
-> **Logging training output to a file:** For long runs, you can capture stdout/stderr so the experiment dir is self-contained. Create the experiment directory first (so the log file path exists), then use `tee` to write to a log file while still showing output in the terminal:
+> **Tip:** Use `tee` to log training output: `... 2>&1 | tee experiments/<name>/training_console.log`
 
 ```bash
 # Step 0 (Optional): Prepare Run from Flat GeoPackage
@@ -138,7 +138,7 @@ docker compose run --rm bridge-classifier \
   --silver-dir ./data/ml-data/silver_training \
   --hucs-dir ./data/osm/hucs \
   --lidar-resources ./data/usgs_entwine/lidar_resources.geojson \
-  --worker 12 \
+  --workers 12 \
   --skip-existing
 
 
@@ -166,15 +166,8 @@ docker compose run --rm bridge-classifier \
   --data-dir ./data/ml-data/training \
   --output ./data/ml-data/class_weights.json
 
-# Step 4: Train Model (Requires NVIDIA GPU). Ensure the experiments directory exists and is writable (see setup above).
-# Pass class weights: add --class-weights ./data/ml-data/class_weights.json if you ran Step 3a.
-# if gpu has headroom: batch_size -> 32
-# num_workers: For 550K files, 4–8 can help; increase if CPU/disk are the bottleneck.
-
-# used for g5.2xlarge ec2
-# change rules
-# --batch-size 4 --accumulate-grad-batches 4 → effective 16, ~half the steps per epoch.
-# --batch-size 8 --accumulate-grad-batches 2 → effective 16, ~quarter of the steps (if it doesn’t OOM).
+# Step 4: Train Model (Requires NVIDIA GPU)
+# Batch size tuning: --batch-size 4 --accumulate-grad-batches 4 → effective 16
 
 mkdir -p experiments/bridge-base-all-data-v0
 docker compose run --rm \

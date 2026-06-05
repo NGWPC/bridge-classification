@@ -40,7 +40,7 @@ Shared constants and lightweight utilities. Zero heavy dependencies (no torch, s
 | `bridge_timeout_guard(seconds)` | Context manager: sets SIGALRM timer, yields, cleans up. Raises `BridgeTimeout` on expiry. |
 
 
-No CLI. Imported by `inference.py`, `train.py`, `preprocess_bridges.py`, `evaluate_model.py`, `batch_entrypoint.py`, `s3.py`.
+No CLI. Imported by `inference.py`, `train.py`, `preprocess_bridges.py`, `evaluate_model.py`, `batch_entrypoint.py`, `s3_client.py`.
 
 ---
 
@@ -363,7 +363,7 @@ Loads a trained checkpoint, classifies a raw LAS/LAZ file, and writes a classifi
 
 **Imports from shared modules:**
 
-- `MODEL_TO_LAS_MAP`, `MIN_POINT_COUNT`, `SPATIAL_SHAPE_PADDING`, `BRIDGE_DECK_MODEL_CLASS`, `BRIDGE_DECK_ASPRS_CODE`, `OBSTACLES_MODEL_CLASS`, `OBSTACLES_ASPRS_CODE`, `BridgeTimeout`, `_timeout_handler` from `src.constants`
+- `MODEL_TO_LAS_MAP`, `MIN_POINT_COUNT`, `SPATIAL_SHAPE_PADDING`, `BRIDGE_DECK_MODEL_CLASS`, `BRIDGE_DECK_ASPRS_CODE`, `OBSTACLES_MODEL_CLASS`, `OBSTACLES_ASPRS_CODE`, `BridgeTimeout`, `bridge_timeout_guard` from `src.constants`
 - `read_las`, `write_las`, `normalize_intensity` from `src.las_io`
 
 **Key functions:**

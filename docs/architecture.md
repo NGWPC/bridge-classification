@@ -252,7 +252,7 @@ Two `SubMConv3d` layers (maintains sparsity pattern) with a shortcut connection 
 2. Shift `xyz -= xyz.min()` (guarantees non-negative SpConv indices)
 3. Optional augmentation: random Z-axis rotation + Gaussian jitter (`σ=0.01 m`)
 4. Quantize: `discrete_coords = floor(xyz / voxel_size)` → int32
-5. Aggregate voxels: mean intensity, majority-vote labels (`aggregate_voxel_points`)
+5. Aggregate voxels: mean intensity, majority-vote labels (`voxelize`)
 6. Optional cap: randomly subsample to `max_voxels` if exceeded (OOM prevention)
 
 `sparse_collate_fn` prepends a batch index to coordinates: `[batch_id, x, y, z]`.
