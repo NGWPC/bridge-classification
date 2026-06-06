@@ -9,6 +9,8 @@ from pathlib import PurePosixPath
 
 from botocore.exceptions import ClientError
 
+from src.constants import InferenceMode
+
 PROBE_EXTENSIONS = ['.laz', '.las']
 
 
@@ -101,14 +103,14 @@ def resolve_output_keys(output_prefix, manifest_line, ext, mode):
     huc_id = str(p.parent)
     stem = p.stem
 
-    if mode == 'masked':
+    if mode == InferenceMode.MASKED:
         primary = f"{output_prefix}/{huc_id}/{stem}_bridge_masked{ext}"
     else:
         primary = f"{output_prefix}/{huc_id}/{stem}_predicted{ext}"
 
     result = {'primary': primary}
 
-    if mode == 'both':
+    if mode == InferenceMode.BOTH:
         result['masked'] = f"{output_prefix}/{huc_id}/{stem}_bridge_masked{ext}"
 
     return result

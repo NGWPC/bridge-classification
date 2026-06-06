@@ -39,3 +39,18 @@ class TestTimeoutMachinery:
     def test_timeout_handler_raises(self):
         with pytest.raises(BridgeTimeout):
             _timeout_handler(signal.SIGALRM, None)
+
+
+class TestInferenceMode:
+    def test_boundary_conversion(self):
+        """Env vars and CLI args arrive as strings — enum must accept them."""
+        from src.constants import InferenceMode
+        assert InferenceMode("masked") == InferenceMode.MASKED
+        assert InferenceMode("raw") == InferenceMode.RAW
+        assert InferenceMode("both") == InferenceMode.BOTH
+
+    def test_rejects_invalid_string(self):
+        """Typo in INFERENCE_MODE env var must fail fast, not silently produce wrong S3 paths."""
+        from src.constants import InferenceMode
+        with pytest.raises(ValueError):
+            InferenceMode("masking")

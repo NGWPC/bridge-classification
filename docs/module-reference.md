@@ -36,11 +36,13 @@ Shared constants and lightweight utilities. Zero heavy dependencies (no torch, s
 
 | Name | Description |
 |------|-------------|
+| `InferenceResult` | Enum: `SUCCESS`, `FAILED`, `SKIPPED` — typed return from `run_inference()` |
+| `InferenceMode` | Enum: `RAW`, `MASKED`, `BOTH` — output mode for inference |
 | `BridgeTimeout` | Exception raised when a bridge exceeds the per-bridge wall-clock timeout |
 | `bridge_timeout_guard(seconds)` | Context manager: sets SIGALRM timer, yields, cleans up. Raises `BridgeTimeout` on expiry. Cannot interrupt blocking C extensions (e.g. PDAL). |
 
 
-No CLI. Imported by `inference.py`, `train.py`, `preprocess_bridges.py`, `evaluate_model.py`, `batch_entrypoint.py`, `s3_client.py`.
+No CLI. Imported by `inference.py`, `train.py`, `preprocess_bridges.py`, `evaluate_model.py`, `batch_entrypoint.py`, `s3_client.py`, `s3_paths.py`, `audit_outputs.py`.
 
 ---
 
@@ -375,7 +377,7 @@ Loads a trained checkpoint, classifies a raw LAS/LAZ file, and writes a classifi
 | `load_las(filepath)`                                             | PDAL read → returns `(points, intensities, metadata, original_arrays)` |
 | `save_las(output_path, original_arrays, labels, metadata)`       | Updates `Classification` field, writes via PDAL                        |
 | `load_model(checkpoint_path, device)`                            | Loads SparseUNet from Lightning or raw checkpoint. Auto-detects `base_channels` from checkpoint `hyper_parameters` (falls back to 16). |
-| `run_inference(model, input_path, output_path, ...)`             | Classify a single file. Returns `True` (success), `False` (failure), or `'skipped'` (< `MIN_POINT_COUNT` points) |
+| `run_inference(model, input_path, output_path, ...)`             | Classify a single file. Returns `InferenceResult` (`SUCCESS`, `FAILED`, or `SKIPPED`). |
 | `apply_bridge_mask(original_classification, point_labels_model)` | Bridge deck only mask: model class 2 → ASPRS 17 overlaid on original   |
 | `run_batch_inference(model, pairs, ...)`                         | Process multiple files with per-bridge timeout via SIGALRM. Returns `(succeeded, failed, skipped)` |
 | `parse_pairs_file(filepath)`                                     | Parse TSV file of input/output path pairs                              |

@@ -51,6 +51,7 @@ from src.constants import (
     BRIDGE_DECK_ASPRS_CODE, BRIDGE_DECK_MODEL_CLASS, MIN_POINT_COUNT,
     MODEL_TO_LAS_MAP, OBSTACLES_ASPRS_CODE, OBSTACLES_MODEL_CLASS,
     SPATIAL_SHAPE_PADDING, BridgeTimeout, bridge_timeout_guard,
+    InferenceResult, InferenceMode,
 )
 from src.las_io import read_las, write_las, normalize_intensity
 from src.voxelization import voxelize
@@ -136,7 +137,7 @@ def load_model(checkpoint_path, device):
     return model
 
 
-def run_inference(model, input_path, output_path, voxel_size=0.1, device=torch.device("cuda"), mode='masked'):
+def run_inference(model, input_path, output_path, voxel_size=0.1, device=torch.device("cuda"), mode='masked') -> InferenceResult:
     """Run inference on a single LAS/LAZ file and save the classified result.
 
     Args:
@@ -149,8 +150,9 @@ def run_inference(model, input_path, output_path, voxel_size=0.1, device=torch.d
               or 'both' (save raw to output_path and masked alongside it).
 
     Returns:
-        True if inference succeeded, False if the file failed,
-        or 'skipped' if the file was intentionally skipped (e.g. too few points).
+        InferenceResult.SUCCESS if inference succeeded,
+        InferenceResult.FAILED if the file failed,
+        or InferenceResult.SKIPPED if intentionally skipped (e.g. too few points).
     """
     try:
         # 1. LOAD DATA
@@ -159,7 +161,7 @@ def run_inference(model, input_path, output_path, voxel_size=0.1, device=torch.d
 
         if len(raw_xyz) < MIN_POINT_COUNT:
             print(f"SKIP: {input_path} has {len(raw_xyz)} points (< {MIN_POINT_COUNT}), skipping.")
-            return 'skipped'
+            return InferenceResult.SKIPPED
 
         # 2. PREPROCESS (Normalize & Voxelize)
         xyz_min = raw_xyz.min(axis=0)
@@ -200,19 +202,19 @@ def run_inference(model, input_path, output_path, voxel_size=0.1, device=torch.d
         point_labels_model = voxel_preds[unique_inverse_indices]
 
         # 5. SAVE (mode-aware)
-        if mode == 'raw':
+        if mode == InferenceMode.RAW:
             point_labels_las = np.zeros_like(point_labels_model, dtype=np.uint8)
             for model_class, las_code in MODEL_TO_LAS_MAP.items():
                 point_labels_las[point_labels_model == model_class] = las_code
             print(f"Saving raw to {output_path}...")
             save_las(output_path, original_arrays, point_labels_las, meta)
 
-        elif mode == 'masked':
+        elif mode == InferenceMode.MASKED:
             masked_labels = apply_bridge_mask(original_arrays['Classification'], point_labels_model)
             print(f"Saving masked to {output_path}...")
             save_las(output_path, original_arrays, masked_labels, meta)
 
-        elif mode == 'both':
+        elif mode == InferenceMode.BOTH:
             # Raw save first
             point_labels_las = np.zeros_like(point_labels_model, dtype=np.uint8)
             for model_class, las_code in MODEL_TO_LAS_MAP.items():
@@ -230,12 +232,12 @@ def run_inference(model, input_path, output_path, voxel_size=0.1, device=torch.d
             save_las(masked_path, original_arrays2, masked_labels, meta2)
 
         print(f"Done: {input_path}")
-        return True
+        return InferenceResult.SUCCESS
 
     except Exception as e:
         bridge_id = os.path.splitext(os.path.basename(str(input_path)))[0]
         print(f"ERROR: failed processing (bridge={bridge_id}): {e}")
-        return False
+        return InferenceResult.FAILED
 
 
 def parse_pairs_file(filepath):
@@ -291,13 +293,13 @@ def run_batch_inference(model, pairs, voxel_size=0.1, device=torch.device("cuda"
         print(f"\n[{i}/{total}] {input_path} -> {output_path}")
         try:
             with bridge_timeout_guard(bridge_timeout):
-                ok = run_inference(model, input_path, output_path, voxel_size, device, mode=mode)
+                result = run_inference(model, input_path, output_path, voxel_size, device, mode=mode)
         except BridgeTimeout:
             print(f"TIMEOUT: bridge={bridge_id} exceeded {bridge_timeout}s, skipping")
-            ok = False
-        if ok == 'skipped':
+            result = InferenceResult.FAILED
+        if result == InferenceResult.SKIPPED:
             skipped += 1
-        elif ok:
+        elif result == InferenceResult.SUCCESS:
             succeeded += 1
         else:
             failed += 1
@@ -315,7 +317,8 @@ def main():
     parser.add_argument('--voxel-size', type=float, default=0.1, help='Voxel size (must match training)')
     parser.add_argument('--bridge-timeout', type=float, default=150,
                         help='Seconds before a hung bridge is skipped in batch mode (default: 150, supports decimals)')
-    parser.add_argument('--mode', type=str, default='masked', choices=['raw', 'masked', 'both'],
+    parser.add_argument('--mode', type=InferenceMode, default=InferenceMode.MASKED,
+                        choices=[m.value for m in InferenceMode],
                         help='Output mode: masked=bridge deck only overlaid on original lidar (default), '
                              'raw=all model labels replace original (old behavior), '
                              'both=save raw (_predicted.laz) and masked (_bridge_masked.laz)')
@@ -344,8 +347,8 @@ def main():
         if failed > 0:
             sys.exit(1)
     else:
-        ok = run_inference(model, args.input, args.output, args.voxel_size, device, mode=args.mode)
-        if ok == False:
+        result = run_inference(model, args.input, args.output, args.voxel_size, device, mode=args.mode)
+        if result == InferenceResult.FAILED:
             sys.exit(1)
 
 if __name__ == "__main__":
