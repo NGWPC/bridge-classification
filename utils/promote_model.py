@@ -25,7 +25,7 @@ from src.model_registry import load_registry, upload_registry
 from src.s3_client import create_s3_client
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Promote a model to production in the S3 model registry"
     )

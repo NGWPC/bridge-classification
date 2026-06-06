@@ -310,7 +310,7 @@ def plot_metrics_compare(
     print(f"Comparison curves saved to: {output_path}")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Visualize training curves from Lightning CSVLogger metrics. "
         "Default: ./experiments/bridge_classify_base/version_0/metrics.csv. Use --csv to override."

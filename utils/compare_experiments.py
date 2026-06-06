@@ -35,7 +35,7 @@ METRIC_COLUMNS = {
 }
 
 
-def build_comparison_table(registry, eval_set, sort_by):
+def build_comparison_table(registry: dict, eval_set: str, sort_by: str) -> 'pd.DataFrame | None':
     """Build a DataFrame comparing models on a given eval set."""
     rows = []
     for name, entry in registry["models"].items():
@@ -66,7 +66,7 @@ def build_comparison_table(registry, eval_set, sort_by):
     return df
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Compare model evaluation metrics from the registry"
     )

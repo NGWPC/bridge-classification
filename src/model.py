@@ -10,6 +10,8 @@ Classes:
     SparseUNet: U-Net architecture with encoder-decoder structure
 """
 
+from typing import Callable, Optional
+
 import torch
 import torch.nn as nn
 import spconv.pytorch as spconv
@@ -23,7 +25,7 @@ class ResidualBlock(nn.Module):
     Uses SubMConv3d to maintain sparsity pattern while applying convolutions.
     """
 
-    def __init__(self, in_channels, out_channels, norm_fn, indice_key=None):
+    def __init__(self, in_channels: int, out_channels: int, norm_fn: Callable, indice_key: Optional[str] = None):
         """
         Args:
             in_channels: Number of input channels
@@ -52,7 +54,7 @@ class ResidualBlock(nn.Module):
                 in_channels, out_channels, kernel_size=1, stride=1, bias=False, indice_key=indice_key
             )
 
-    def forward(self, x):
+    def forward(self, x: spconv.SparseConvTensor) -> spconv.SparseConvTensor:
         """
         Forward pass with residual connection.
 
@@ -90,7 +92,7 @@ class SparseUNet(nn.Module):
     - Output: Per-voxel classification into num_classes
     """
 
-    def __init__(self, input_channels=1, num_classes=4, base_channels=16):
+    def __init__(self, input_channels: int = 1, num_classes: int = 4, base_channels: int = 16):
         """
         Args:
             input_channels: Number of input features (default: 1 for intensity)
@@ -150,7 +152,7 @@ class SparseUNet(nn.Module):
         # Map back to num_classes
         self.classifier = spconv.SubMConv3d(base_channels, num_classes, 3, padding=1, bias=True, indice_key='subm0')
 
-    def freeze_encoder(self):
+    def freeze_encoder(self) -> None:
         """Freeze all encoder layers. Only decoder and classifier remain trainable."""
         encoder_modules = [
             self.conv_input, self.bn_input,
@@ -163,7 +165,7 @@ class SparseUNet(nn.Module):
             for param in module.parameters():
                 param.requires_grad = False
 
-    def forward(self, x):
+    def forward(self, x: spconv.SparseConvTensor) -> torch.Tensor:
         """
         Forward pass through the U-Net.
 

@@ -297,7 +297,7 @@ def aggregate_metrics(bridge_results: list) -> dict:
 # Output
 # ---------------------------------------------------------------------------
 
-def print_summary_table(aggregate: dict, label: str = "Model Predictions"):
+def print_summary_table(aggregate: dict, label: str = "Model Predictions") -> None:
     """Print a formatted summary table to console."""
     print()
     print("=" * 72)
@@ -327,7 +327,7 @@ def print_summary_table(aggregate: dict, label: str = "Model Predictions"):
     print("=" * 72)
 
 
-def print_comparison_table(model_agg: dict, silver_agg: dict):
+def print_comparison_table(model_agg: dict, silver_agg: dict) -> None:
     """Print a side-by-side comparison table with delta (model - silver)."""
     if not model_agg or not silver_agg:
         return
@@ -358,7 +358,7 @@ def print_comparison_table(model_agg: dict, silver_agg: dict):
     print("=" * W)
 
 
-def print_binary_table(model_agg: dict, silver_agg: dict):
+def print_binary_table(model_agg: dict, silver_agg: dict) -> None:
     """Print binary (bridge vs non-bridge) metrics for model and silver.
 
     Shows both bridge and non-bridge class metrics plus binary overall accuracy.
@@ -397,7 +397,7 @@ def print_binary_table(model_agg: dict, silver_agg: dict):
     print("=" * W)
 
 
-def _to_serializable(obj):
+def _to_serializable(obj: object) -> object:
     """Recursively convert numpy types for JSON serialization."""
     if isinstance(obj, np.ndarray):
         return obj.tolist()
@@ -413,7 +413,7 @@ def _to_serializable(obj):
 
 
 def save_outputs(model_agg: dict, silver_agg: dict, bridge_results: list,
-                 output_dir: Path, model_path: str, no_plot: bool):
+                 output_dir: Path, model_path: str, no_plot: bool) -> None:
     """Save per-bridge CSV, summary JSON, and confusion matrix PNG."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -536,8 +536,8 @@ def save_outputs(model_agg: dict, silver_agg: dict, bridge_results: list,
 # Registry integration
 # ---------------------------------------------------------------------------
 
-def _register_evaluation(model_name, eval_name, model_metrics, output_dir,
-                         bucket, prefix, profile):
+def _register_evaluation(model_name: str, eval_name: str, model_metrics: dict, output_dir: Path,
+                         bucket: str, prefix: str, profile: Optional[str]) -> None:
     """Update registry.json with evaluation metrics and upload artifacts to S3."""
     # Lazy imports — only needed when --register is used
     from src.model_registry import load_registry, upload_registry
@@ -614,7 +614,7 @@ def _load_and_evaluate(pred_path: Path, gold_labels: np.ndarray,
 # Main
 # ---------------------------------------------------------------------------
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Evaluate bridge classification model against gold-labeled data"
     )

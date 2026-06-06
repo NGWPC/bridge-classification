@@ -6,6 +6,7 @@ and computes output key naming by inference mode (raw/masked/both).
 """
 
 from pathlib import PurePosixPath
+from typing import Any, Dict
 
 from botocore.exceptions import ClientError
 
@@ -14,7 +15,7 @@ from src.constants import InferenceMode
 PROBE_EXTENSIONS = ['.laz', '.las']
 
 
-def resolve_input_key(s3_client, bucket, input_prefix, manifest_line):
+def resolve_input_key(s3_client: Any, bucket: str, input_prefix: str, manifest_line: str) -> str:
     """Resolve a manifest line to a full S3 input key, probing extensions if needed.
 
     If the manifest line already ends with .laz or .las, it is used directly.
@@ -53,7 +54,7 @@ def resolve_input_key(s3_client, bucket, input_prefix, manifest_line):
     )
 
 
-def resolve_extension(s3_client, bucket, input_prefix, manifest_line):
+def resolve_extension(s3_client: Any, bucket: str, input_prefix: str, manifest_line: str) -> str:
     """Determine the actual file extension for a manifest line by probing S3.
 
     Returns the extension from the manifest line directly if it already has one.
@@ -78,7 +79,7 @@ def resolve_extension(s3_client, bucket, input_prefix, manifest_line):
         return '.laz'  # default fallback
 
 
-def resolve_output_keys(output_prefix, manifest_line, ext, mode):
+def resolve_output_keys(output_prefix: str, manifest_line: str, ext: str, mode: InferenceMode) -> Dict[str, str]:
     """Compute the expected S3 output key(s) for a manifest line.
 
     Args:

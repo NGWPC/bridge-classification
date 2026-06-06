@@ -49,9 +49,8 @@ import torch
 
 from src.constants import (
     BRIDGE_DECK_ASPRS_CODE, BRIDGE_DECK_MODEL_CLASS, MIN_POINT_COUNT,
-    MODEL_TO_LAS_MAP, OBSTACLES_ASPRS_CODE, OBSTACLES_MODEL_CLASS,
-    SPATIAL_SHAPE_PADDING, BridgeTimeout, bridge_timeout_guard,
-    InferenceResult, InferenceMode,
+    MODEL_TO_LAS_MAP, SPATIAL_SHAPE_PADDING, BridgeTimeout,
+    bridge_timeout_guard, InferenceResult, InferenceMode,
 )
 from src.las_io import read_las, write_las, normalize_intensity
 from src.voxelization import voxelize
@@ -59,7 +58,7 @@ from src.voxelization import voxelize
 import spconv.pytorch as spconv
 from src.model import SparseUNet
 
-def apply_bridge_mask(original_classification, point_labels_model):
+def apply_bridge_mask(original_classification: np.ndarray, point_labels_model: np.ndarray) -> np.ndarray:
     """Apply binary bridge deck mask: only reclassify model class 2 -> ASPRS 17.
 
     All other points retain their original LiDAR classification unchanged.
@@ -76,7 +75,7 @@ def apply_bridge_mask(original_classification, point_labels_model):
     return merged
 
 
-def load_las(filepath):
+def load_las(filepath: str) -> tuple:
     """Read LAS file and return XYZ + Intensity."""
     arrays, metadata = read_las(filepath)
 
@@ -86,13 +85,13 @@ def load_las(filepath):
     return points, intensities, metadata, arrays
 
 
-def save_las(output_path, original_arrays, labels, metadata):
+def save_las(output_path: 'str | Path', original_arrays: np.ndarray, labels: np.ndarray, metadata: dict) -> None:
     """Save the classified point cloud."""
     original_arrays['Classification'] = labels.astype(np.uint8)
     write_las(output_path, original_arrays)
 
 
-def load_model(checkpoint_path, device):
+def load_model(checkpoint_path: str, device: torch.device) -> 'SparseUNet':
     """Load a trained SparseUNet model from a checkpoint file.
 
     Handles both Lightning checkpoints (strips 'model.' prefix from keys)
@@ -240,7 +239,7 @@ def run_inference(model, input_path, output_path, voxel_size=0.1, device=torch.d
         return InferenceResult.FAILED
 
 
-def parse_pairs_file(filepath):
+def parse_pairs_file(filepath: str) -> list:
     """Parse a TSV file of input/output path pairs.
 
     Each line: input_path<TAB>output_path
@@ -263,7 +262,7 @@ def parse_pairs_file(filepath):
     return pairs
 
 
-def run_batch_inference(model, pairs, voxel_size=0.1, device=torch.device("cuda"), bridge_timeout=150, mode='masked'):
+def run_batch_inference(model: 'SparseUNet', pairs: list, voxel_size: float = 0.1, device: torch.device = torch.device("cuda"), bridge_timeout: float = 150, mode: InferenceMode = InferenceMode.MASKED) -> tuple:
     """Run inference on multiple input/output file pairs.
 
     Processes each pair sequentially, continuing on failure so one bad file
@@ -307,7 +306,7 @@ def run_batch_inference(model, pairs, voxel_size=0.1, device=torch.device("cuda"
     return succeeded, failed, skipped
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Bridge Classification Inference")
     parser.add_argument('--input', type=str, default=None, help='Input LAS/LAZ file (single-file mode)')
     parser.add_argument('--output', type=str, default=None, help='Output LAS/LAZ file (single-file mode)')

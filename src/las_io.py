@@ -4,12 +4,14 @@ Shared read/write helpers used by inference, preprocessing, and evaluation.
 """
 
 import json
+from pathlib import Path
+from typing import Any, Dict, Tuple, Union
 
 import numpy as np
 import pdal
 
 
-def read_las(filepath):
+def read_las(filepath: Union[str, Path]) -> Tuple[np.ndarray, Dict[str, Any]]:
     """Read a LAS/LAZ file via PDAL.
 
     Returns:
@@ -22,7 +24,7 @@ def read_las(filepath):
     return pipeline.arrays[0], pipeline.metadata
 
 
-def write_las(output_path, arrays, srs="EPSG:3857"):
+def write_las(output_path: Union[str, Path], arrays: np.ndarray, srs: str = "EPSG:3857") -> None:
     """Write a LAS/LAZ file via PDAL with standard options.
 
     Preserves all extra dims and forward headers from the input arrays.
@@ -46,7 +48,7 @@ def write_las(output_path, arrays, srs="EPSG:3857"):
     pipeline.execute()
 
 
-def normalize_intensity(intensity):
+def normalize_intensity(intensity: np.ndarray) -> np.ndarray:
     """Normalize intensity values to 0-1 range.
 
     Args:

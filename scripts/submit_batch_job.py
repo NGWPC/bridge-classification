@@ -28,6 +28,7 @@ import os
 import subprocess
 import sys
 from datetime import datetime
+from typing import Any, Dict, Optional
 
 import boto3
 
@@ -40,7 +41,7 @@ DEFAULT_CHUNK_TARGET = 60
 SPOT_PRICE_PER_HOUR = 0.218  # g4dn.xlarge spot estimate - https://instances.vantage.sh/aws/ec2/g4dn.xlarge?currency=USD
 
 
-def get_terraform_outputs(terraform_dir='terraform'):
+def get_terraform_outputs(terraform_dir: str = 'terraform') -> Dict[str, str]:
     """Read AWS config from terraform outputs."""
     outputs = {}
     keys = ['aws_region', 'aws_profile', 'job_definition_name', 'job_queue_name', 's3_manifest_uri']
@@ -62,12 +63,12 @@ def get_terraform_outputs(terraform_dir='terraform'):
     return outputs
 
 
-def count_manifest_lines(s3_client, manifest_uri):
+def count_manifest_lines(s3_client: Any, manifest_uri: str) -> int:
     """Stream an S3 manifest and count non-empty lines."""
     return sum(1 for _ in stream_manifest_lines(s3_client, manifest_uri))
 
 
-def validate_manifest(s3_client, manifest_uri):
+def validate_manifest(s3_client: Any, manifest_uri: str) -> tuple:
     """Check manifest for common issues. Returns (line_count, issues)."""
     lines = list(stream_manifest_lines(s3_client, manifest_uri))
     issues = []
@@ -86,7 +87,7 @@ def validate_manifest(s3_client, manifest_uri):
     return len(lines), issues
 
 
-def compute_array_size(total, chunk_target, max_array_size=MAX_ARRAY_SIZE):
+def compute_array_size(total: int, chunk_target: int, max_array_size: int = MAX_ARRAY_SIZE) -> int:
     """Compute array size, capped at AWS Batch limit."""
     if total <= chunk_target:
         return 1
@@ -94,7 +95,7 @@ def compute_array_size(total, chunk_target, max_array_size=MAX_ARRAY_SIZE):
     return min(size, max_array_size)
 
 
-def build_container_overrides(array_size, env_overrides=None):
+def build_container_overrides(array_size: int, env_overrides: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """Build the containerOverrides JSON for Batch submission."""
     env_items = [{'name': 'ARRAY_SIZE', 'value': str(array_size)}]
 
@@ -105,7 +106,7 @@ def build_container_overrides(array_size, env_overrides=None):
     return {'environment': env_items}
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description='Bridge Classification — Submit Batch Job')
     parser.add_argument('--manifest', type=str, help='S3 URI of manifest file')
     parser.add_argument('--total', type=int, help='Total file count (skip manifest download)')

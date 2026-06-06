@@ -219,7 +219,7 @@ def plot_source_vs_silver(
     print(f"Saved: {output_path}")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="mode", required=True)
 

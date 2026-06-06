@@ -22,6 +22,7 @@ import signal
 import sys
 import time
 from pathlib import Path, PurePosixPath
+from typing import Any, Dict, Optional, Tuple
 
 import torch
 from botocore.exceptions import ClientError
@@ -39,7 +40,7 @@ from src.s3_client import (
 from src.s3_paths import resolve_input_key, resolve_output_keys
 
 
-def log(msg, child_index=None, bridge_id=None):
+def log(msg: str, child_index: Optional[int] = None, bridge_id: Optional[str] = None) -> None:
     """Structured log line for logging to CloudWatch."""
     prefix = f"[Child {child_index}]" if child_index is not None else "[Entrypoint]"
     if bridge_id:
@@ -47,7 +48,7 @@ def log(msg, child_index=None, bridge_id=None):
     print(f"{prefix} {msg}", flush=True)
 
 
-def parse_config():
+def parse_config() -> Dict[str, Any]:
     """Read and validate environment variables."""
     required = ['S3_BUCKET', 'S3_INPUT_PREFIX', 'S3_MANIFEST_URI', 'S3_MODEL_URI', 'S3_OUTPUT_PREFIX']
     missing = [v for v in required if not os.environ.get(v)]
@@ -69,7 +70,7 @@ def parse_config():
     }
 
 
-def compute_chunk(job_index, array_size, total_lines):
+def compute_chunk(job_index: int, array_size: int, total_lines: int) -> Tuple[int, int]:
     """Compute this child's slice of manifest lines (0-based indices).
 
     Returns (start, end) where start is inclusive and end is exclusive.
@@ -80,7 +81,7 @@ def compute_chunk(job_index, array_size, total_lines):
     return start, end
 
 
-def cleanup(*paths):
+def cleanup(*paths: str) -> None:
     """Remove local files if they exist."""
     for p in paths:
         try:
@@ -89,7 +90,7 @@ def cleanup(*paths):
             pass
 
 
-def main():
+def main() -> None:
     job_start = time.time()
 
     # --- Config ---

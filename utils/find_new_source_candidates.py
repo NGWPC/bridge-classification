@@ -67,9 +67,7 @@ import argparse
 import csv
 import os
 import sys
-import random
 import warnings
-from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -77,7 +75,7 @@ import geopandas as gpd
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from src.lidar_utils import (
-    load_lidar_index, find_intersecting_sources, safe_source_name,
+    load_lidar_index, find_intersecting_sources,
     bridge_stem as make_bridge_stem, stratified_sample, EPSG, DEFAULT_BUFFER,
 )
 from src.gpkg_utils import read_bridge_gpkg, iter_huc_gpkgs, DEFAULT_GPKG_TEMPLATE
@@ -255,7 +253,7 @@ def print_summary(
 # Main
 # ---------------------------------------------------------------------------
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Find bridge+lidar source candidates not in existing splits"
     )
