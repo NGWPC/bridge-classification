@@ -85,7 +85,7 @@ def load_las(filepath: str) -> tuple:
     return points, intensities, metadata, arrays
 
 
-def save_las(output_path: 'str | Path', original_arrays: np.ndarray, labels: np.ndarray, metadata: dict) -> None:
+def save_las(output_path: 'str | Path', original_arrays: np.ndarray, labels: np.ndarray) -> None:
     """Save the classified point cloud."""
     original_arrays['Classification'] = labels.astype(np.uint8)
     write_las(output_path, original_arrays)
@@ -156,7 +156,7 @@ def run_inference(model, input_path, output_path, voxel_size=0.1, device=torch.d
     try:
         # 1. LOAD DATA
         print(f"Loading data: {input_path}")
-        raw_xyz, raw_intensity, meta, original_arrays = load_las(input_path)
+        raw_xyz, raw_intensity, _, original_arrays = load_las(input_path)
 
         if len(raw_xyz) < MIN_POINT_COUNT:
             print(f"SKIP: {input_path} has {len(raw_xyz)} points (< {MIN_POINT_COUNT}), skipping.")
@@ -206,12 +206,12 @@ def run_inference(model, input_path, output_path, voxel_size=0.1, device=torch.d
             for model_class, las_code in MODEL_TO_LAS_MAP.items():
                 point_labels_las[point_labels_model == model_class] = las_code
             print(f"Saving raw to {output_path}...")
-            save_las(output_path, original_arrays, point_labels_las, meta)
+            save_las(output_path, original_arrays, point_labels_las)
 
         elif mode == InferenceMode.MASKED:
             masked_labels = apply_bridge_mask(original_arrays['Classification'], point_labels_model)
             print(f"Saving masked to {output_path}...")
-            save_las(output_path, original_arrays, masked_labels, meta)
+            save_las(output_path, original_arrays, masked_labels)
 
         elif mode == InferenceMode.BOTH:
             # Raw save first
@@ -219,16 +219,16 @@ def run_inference(model, input_path, output_path, voxel_size=0.1, device=torch.d
             for model_class, las_code in MODEL_TO_LAS_MAP.items():
                 point_labels_las[point_labels_model == model_class] = las_code
             print(f"Saving raw to {output_path}...")
-            save_las(output_path, original_arrays, point_labels_las, meta)
+            save_las(output_path, original_arrays, point_labels_las)
 
             # Masked save — re-load original because save_las mutates original_arrays['Classification']
-            _, _, meta2, original_arrays2 = load_las(input_path)
+            _, _, _, original_arrays2 = load_las(input_path)
             masked_labels = apply_bridge_mask(original_arrays2['Classification'], point_labels_model)
             p = Path(input_path)
             masked_path = Path(output_path).parent / (p.stem + '_bridge_masked' + p.suffix)
             os.makedirs(masked_path.parent, exist_ok=True)
             print(f"Saving masked to {masked_path}...")
-            save_las(masked_path, original_arrays2, masked_labels, meta2)
+            save_las(masked_path, original_arrays2, masked_labels)
 
         print(f"Done: {input_path}")
         return InferenceResult.SUCCESS
