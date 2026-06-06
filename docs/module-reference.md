@@ -722,6 +722,12 @@ Prints a sorted comparison table of model evaluation metrics from `registry.json
 
 Evaluates a trained bridge classification model against human-annotated (gold) data. Reports metrics for both model predictions and silver (auto-labeled) baseline. Supports two modes: running inference from a checkpoint (`--model`) or evaluating pre-computed predictions (`--inference-dir`). Optionally updates the S3 model registry with evaluation metrics (`--register`).
 
+**Classes:**
+
+| Class | Description |
+|-------|-------------|
+| `EvalStatus` | Enum: `OK`, `POINT_COUNT_MISMATCH`, `LOAD_ERROR`, `NO_INFERENCE_FILE`, `TIMEOUT`, `INFERENCE_ERROR`, `SKIPPED_TOO_FEW_POINTS` — typed status for evaluation steps. |
+
 **Key functions:**
 
 
@@ -817,6 +823,12 @@ Finds bridge+lidar source combinations not in existing train/val/test splits for
 ### `utils/download_bridge_lidar.py`
 
 Downloads raw lidar point clouds for OSM bridges without applying weak supervision. Lightweight alternative to `download_and_weak_supervise_hucs.py` for bridges that only need source LAZ (e.g., inference on not-lidar bridges).
+
+**Classes:**
+
+| Class | Description |
+|-------|-------------|
+| `DownloadFailure` | Enum: `NO_POINTS`, `EXCEPTION` — typed failure reason for download results. |
 
 **CLI arguments:**
 
