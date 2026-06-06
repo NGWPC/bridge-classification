@@ -36,11 +36,13 @@ Shared constants and lightweight utilities. Zero heavy dependencies (no torch, s
 
 | Name | Description |
 |------|-------------|
+| `InferenceResult` | Enum: `SUCCESS`, `FAILED`, `SKIPPED` — typed return from `run_inference()` |
+| `InferenceMode` | Enum: `RAW`, `MASKED`, `BOTH` — output mode for inference |
 | `BridgeTimeout` | Exception raised when a bridge exceeds the per-bridge wall-clock timeout |
 | `bridge_timeout_guard(seconds)` | Context manager: sets SIGALRM timer, yields, cleans up. Raises `BridgeTimeout` on expiry. Cannot interrupt blocking C extensions (e.g. PDAL). |
 
 
-No CLI. Imported by `inference.py`, `train.py`, `preprocess_bridges.py`, `evaluate_model.py`, `batch_entrypoint.py`, `s3_client.py`.
+No CLI. Imported by `inference.py`, `train.py`, `preprocess_bridges.py`, `evaluate_model.py`, `batch_entrypoint.py`, `s3_client.py`, `s3_paths.py`, `audit_outputs.py`.
 
 ---
 
@@ -375,7 +377,7 @@ Loads a trained checkpoint, classifies a raw LAS/LAZ file, and writes a classifi
 | `load_las(filepath)`                                             | PDAL read → returns `(points, intensities, metadata, original_arrays)` |
 | `save_las(output_path, original_arrays, labels, metadata)`       | Updates `Classification` field, writes via PDAL                        |
 | `load_model(checkpoint_path, device)`                            | Loads SparseUNet from Lightning or raw checkpoint. Auto-detects `base_channels` from checkpoint `hyper_parameters` (falls back to 16). |
-| `run_inference(model, input_path, output_path, ...)`             | Classify a single file. Returns `True` (success), `False` (failure), or `'skipped'` (< `MIN_POINT_COUNT` points) |
+| `run_inference(model, input_path, output_path, ...)`             | Classify a single file. Returns `InferenceResult` (`SUCCESS`, `FAILED`, or `SKIPPED`). |
 | `apply_bridge_mask(original_classification, point_labels_model)` | Bridge deck only mask: model class 2 → ASPRS 17 overlaid on original   |
 | `run_batch_inference(model, pairs, ...)`                         | Process multiple files with per-bridge timeout via SIGALRM. Returns `(succeeded, failed, skipped)` |
 | `parse_pairs_file(filepath)`                                     | Parse TSV file of input/output path pairs                              |
@@ -720,6 +722,12 @@ Prints a sorted comparison table of model evaluation metrics from `registry.json
 
 Evaluates a trained bridge classification model against human-annotated (gold) data. Reports metrics for both model predictions and silver (auto-labeled) baseline. Supports two modes: running inference from a checkpoint (`--model`) or evaluating pre-computed predictions (`--inference-dir`). Optionally updates the S3 model registry with evaluation metrics (`--register`).
 
+**Classes:**
+
+| Class | Description |
+|-------|-------------|
+| `EvalStatus` | Enum: `OK`, `POINT_COUNT_MISMATCH`, `LOAD_ERROR`, `NO_INFERENCE_FILE`, `TIMEOUT`, `INFERENCE_ERROR`, `SKIPPED_TOO_FEW_POINTS` — typed status for evaluation steps. |
+
 **Key functions:**
 
 
@@ -815,6 +823,12 @@ Finds bridge+lidar source combinations not in existing train/val/test splits for
 ### `utils/download_bridge_lidar.py`
 
 Downloads raw lidar point clouds for OSM bridges without applying weak supervision. Lightweight alternative to `download_and_weak_supervise_hucs.py` for bridges that only need source LAZ (e.g., inference on not-lidar bridges).
+
+**Classes:**
+
+| Class | Description |
+|-------|-------------|
+| `DownloadFailure` | Enum: `NO_POINTS`, `EXCEPTION` — typed failure reason for download results. |
 
 **CLI arguments:**
 

@@ -42,6 +42,7 @@ import os
 import random
 import sys
 import warnings
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -62,6 +63,13 @@ except ImportError:
     HAS_TQDM = False
 
 warnings.filterwarnings('ignore')
+
+
+class DownloadFailure(Enum):
+    """Why a bridge download failed."""
+    NO_POINTS = "no_points"
+    EXCEPTION = "exception"
+
 
 # Global logger (initialized in main)
 logger: Optional[logging.Logger] = None
@@ -132,6 +140,7 @@ def download_one_bridge(args: tuple) -> Dict[str, Any]:
         if count == 0:
             laz_path.parent.mkdir(parents=True, exist_ok=True)
             sentinel.write_text("# No points found\n")
+            result['reason'] = DownloadFailure.NO_POINTS
             result['error'] = 'No points found'
             return result
 
@@ -152,6 +161,7 @@ def download_one_bridge(args: tuple) -> Dict[str, Any]:
         result['success'] = True
 
     except Exception as e:
+        result['reason'] = DownloadFailure.EXCEPTION
         result['error'] = str(e)
 
     return result
@@ -315,7 +325,7 @@ def main() -> None:
                     logger.info(f"[{r['huc_id']}] OSM ID {r['osmid']} / {r['source_name']}: skipped (already exists)")
                 elif r['success']:
                     logger.info(f"[{r['huc_id']}] OSM ID {r['osmid']} / {r['source_name']}: downloaded ({r['points']} points)")
-                elif r.get('error') == 'No points found':
+                elif r.get('reason') == DownloadFailure.NO_POINTS:
                     logger.info(f"[{r['huc_id']}] OSM ID {r['osmid']} / {r['source_name']}: no points found (sentinel written)")
                 else:
                     logger.error(f"[{r['huc_id']}] OSM ID {r['osmid']} / {r['source_name']}: {r['error']}")
@@ -324,7 +334,7 @@ def main() -> None:
     success = sum(1 for r in results if r['success'])
     skipped = sum(1 for r in results if r.get('skipped'))
     failed = sum(1 for r in results if not r['success'])
-    no_points = sum(1 for r in results if r.get('error') == 'No points found')
+    no_points = sum(1 for r in results if r.get('reason') == DownloadFailure.NO_POINTS)
     total_points = sum(r.get('points', 0) for r in results)
 
     summary = (
@@ -344,7 +354,7 @@ def main() -> None:
     if logger:
         logger.info(summary)
 
-    errors = [r for r in results if not r['success'] and r.get('error') != 'No points found']
+    errors = [r for r in results if not r['success'] and r.get('reason') != DownloadFailure.NO_POINTS]
     if errors:
         print(f"\nErrors:")
         for e in errors[:10]:

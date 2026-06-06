@@ -26,6 +26,7 @@ import json
 import os
 import shlex
 import sys
+from enum import Enum
 from pathlib import Path
 from typing import Optional
 
@@ -36,7 +37,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 from src.constants import (
     LAS_TO_MODEL_MAP, NUM_CLASSES, BRIDGE_DECK_MODEL_CLASS as BRIDGE_DECK_CLASS,
-    CLASS_NAMES, BridgeTimeout, bridge_timeout_guard,
+    CLASS_NAMES, BridgeTimeout, bridge_timeout_guard, InferenceResult,
 )
 from src.las_io import read_las
 
@@ -72,6 +73,17 @@ try:
     HAS_TQDM = True
 except ImportError:
     HAS_TQDM = False
+
+
+class EvalStatus(Enum):
+    """Status of a bridge evaluation step."""
+    OK = "ok"
+    POINT_COUNT_MISMATCH = "point_count_mismatch"
+    LOAD_ERROR = "load_error"
+    NO_INFERENCE_FILE = "no_inference_file"
+    TIMEOUT = "timeout"
+    INFERENCE_ERROR = "inference_error"
+    SKIPPED_TOO_FEW_POINTS = "skipped_too_few_points"
 
 
 # ---------------------------------------------------------------------------
@@ -591,11 +603,11 @@ def _load_and_evaluate(pred_path: Path, gold_labels: np.ndarray,
         if len(pred_labels) != len(gold_labels):
             print(f"WARN (bridge={bridge_id}): Model/gold point count mismatch "
                   f"({len(pred_labels)} vs {len(gold_labels)})")
-            return "point_count_mismatch", None
-        return "ok", evaluate_bridge(gold_labels, pred_labels)
+            return EvalStatus.POINT_COUNT_MISMATCH, None
+        return EvalStatus.OK, evaluate_bridge(gold_labels, pred_labels)
     except Exception as e:
         print(f"WARN (bridge={bridge_id}): Failed to load inference output: {e}")
-        return "load_error", None
+        return EvalStatus.LOAD_ERROR, None
 
 
 # ---------------------------------------------------------------------------
@@ -729,14 +741,14 @@ def main():
             if len(silver_labels) != len(gold_labels):
                 print(f"WARN (bridge={bridge_id}): Silver/gold point count mismatch "
                       f"({len(silver_labels)} vs {len(gold_labels)})")
-                entry["silver_status"] = "point_count_mismatch"
+                entry["silver_status"] = EvalStatus.POINT_COUNT_MISMATCH.value
                 entry["silver_result"] = None
             else:
                 entry["silver_result"] = evaluate_bridge(gold_labels, silver_labels)
-                entry["silver_status"] = "ok"
+                entry["silver_status"] = EvalStatus.OK.value
         except Exception as e:
             print(f"WARN (bridge={bridge_id}): Silver evaluation failed: {e}")
-            entry["silver_status"] = "error"
+            entry["silver_status"] = EvalStatus.LOAD_ERROR.value
             entry["silver_result"] = None
 
         # --- Model predictions ---
@@ -744,11 +756,12 @@ def main():
             pred_path = find_matching_file(args.inference_dir, huc_id, stem)
             if pred_path is None:
                 print(f"WARN (bridge={bridge_id}): No inference output found")
-                entry["model_status"] = "no_inference_file"
+                entry["model_status"] = EvalStatus.NO_INFERENCE_FILE.value
                 entry["model_result"] = None
             else:
-                entry["model_status"], entry["model_result"] = \
-                    _load_and_evaluate(pred_path, gold_labels, bridge_id)
+                status, result = _load_and_evaluate(pred_path, gold_labels, bridge_id)
+                entry["model_status"] = status.value
+                entry["model_result"] = result
         else:
             pred_path = inference_output_dir / huc_id / f"{stem}.laz"
             pred_path.parent.mkdir(parents=True, exist_ok=True)
@@ -759,21 +772,25 @@ def main():
                     ok = run_inference_fn(model, test_laz, pred_path, args.voxel_size, device)
             except BridgeTimeout:
                 print(f"TIMEOUT (bridge={bridge_id}): exceeded {args.bridge_timeout}s")
-                entry["model_status"] = "timeout"
+                entry["model_status"] = EvalStatus.TIMEOUT.value
                 entry["model_result"] = None
                 bridge_results.append(entry)
                 continue
             except Exception as e:
                 print(f"WARN (bridge={bridge_id}): Inference failed: {e}")
-                entry["model_status"] = "inference_error"
+                entry["model_status"] = EvalStatus.INFERENCE_ERROR.value
                 entry["model_result"] = None
-                ok = False
+                ok = InferenceResult.FAILED
 
-            if ok:
-                entry["model_status"], entry["model_result"] = \
-                    _load_and_evaluate(pred_path, gold_labels, bridge_id)
+            if ok == InferenceResult.SUCCESS:
+                status, result = _load_and_evaluate(pred_path, gold_labels, bridge_id)
+                entry["model_status"] = status.value
+                entry["model_result"] = result
+            elif ok == InferenceResult.SKIPPED:
+                entry["model_status"] = EvalStatus.SKIPPED_TOO_FEW_POINTS.value
+                entry["model_result"] = None
             elif "model_status" not in entry:
-                entry["model_status"] = "inference_error"
+                entry["model_status"] = EvalStatus.INFERENCE_ERROR.value
                 entry["model_result"] = None
 
         bridge_results.append(entry)
@@ -805,8 +822,8 @@ def main():
         for bridge_id, reason in skipped:
             print(f"  {bridge_id}: {reason}")
 
-    model_ok = sum(1 for r in bridge_results if r.get("model_status") == "ok")
-    silver_ok = sum(1 for r in bridge_results if r.get("silver_status") == "ok")
+    model_ok = sum(1 for r in bridge_results if r.get("model_status") == EvalStatus.OK.value)
+    silver_ok = sum(1 for r in bridge_results if r.get("silver_status") == EvalStatus.OK.value)
     print(f"\nModel:  {model_ok} bridges evaluated")
     print(f"Silver: {silver_ok} bridges evaluated")
 

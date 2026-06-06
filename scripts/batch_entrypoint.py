@@ -28,7 +28,10 @@ from botocore.exceptions import ClientError
 
 # Add project root to path so we can import from src/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from src.constants import BridgeTimeout, MIN_POINT_COUNT, bridge_timeout_guard
+from src.constants import (
+    BridgeTimeout, MIN_POINT_COUNT, bridge_timeout_guard,
+    InferenceResult, InferenceMode,
+)
 from src.inference import load_model, run_inference
 from src.s3_client import (
     create_s3_client, download_file, object_exists, parse_s3_uri, upload_file,
@@ -61,7 +64,7 @@ def parse_config():
         's3_output_prefix': os.environ['S3_OUTPUT_PREFIX'],
         'job_index': int(os.environ.get('AWS_BATCH_JOB_ARRAY_INDEX', '0')),
         'array_size': int(os.environ.get('ARRAY_SIZE', '1')),
-        'inference_mode': os.environ.get('INFERENCE_MODE', 'masked'),
+        'inference_mode': InferenceMode(os.environ.get('INFERENCE_MODE', 'masked')),
         'bridge_timeout': float(os.environ.get('BRIDGE_TIMEOUT', '150')),
     }
 
@@ -180,7 +183,7 @@ def main():
 
         # 4b. Skip if output already exists in S3 (resumability)
         primary_exists = object_exists(s3, bucket, output_keys['primary'])
-        if mode == 'both':
+        if mode == InferenceMode.BOTH:
             masked_exists = object_exists(s3, bucket, output_keys.get('masked', ''))
             all_exist = primary_exists and masked_exists
         else:
@@ -219,16 +222,16 @@ def main():
         except BridgeTimeout:
             log(f"INFER_FAILED reason=timeout bridge_timeout={bridge_timeout}s huc={huc_id} manifest_line={global_line}",
                 child_index=idx, bridge_id=bridge_id)
-            ok = False
+            ok = InferenceResult.FAILED
 
-        if ok == 'skipped':
+        if ok == InferenceResult.SKIPPED:
             log(f"SKIP_SMALL_FILE points<{MIN_POINT_COUNT} huc={huc_id} manifest_line={global_line}",
                 child_index=idx, bridge_id=bridge_id)
             skipped_too_few_points += 1
             cleanup(local_input, local_output)
             continue
 
-        if not ok:
+        if ok == InferenceResult.FAILED:
             log(f"INFER_FAILED reason=inference_error huc={huc_id} manifest_line={global_line}",
                 child_index=idx, bridge_id=bridge_id)
             failed += 1
@@ -242,7 +245,7 @@ def main():
                 child_index=idx, bridge_id=bridge_id)
 
             # mode=both: also upload the masked file that run_inference wrote
-            if mode == 'both' and 'masked' in output_keys:
+            if mode == InferenceMode.BOTH and 'masked' in output_keys:
                 masked_name = PurePosixPath(output_keys['masked']).name
                 masked_local = str(local_output_dir / masked_name)
                 if os.path.isfile(masked_local):

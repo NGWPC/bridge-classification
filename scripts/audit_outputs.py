@@ -37,6 +37,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Add project root to path so we can import from src/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from src.constants import InferenceMode
 from src.s3_client import create_s3_client, object_exists, stream_manifest_lines
 from src.s3_paths import resolve_extension, resolve_output_keys
 
@@ -67,7 +68,8 @@ def main():
     parser.add_argument('--bucket', type=str, required=True, help='S3 bucket for outputs')
     parser.add_argument('--input-prefix', type=str, default='', help='S3 prefix for input files (for extension probing)')
     parser.add_argument('--output-prefix', type=str, required=True, help='S3 prefix for output files')
-    parser.add_argument('--mode', type=str, default='masked', choices=['raw', 'masked', 'both'],
+    parser.add_argument('--mode', type=InferenceMode, default=InferenceMode.MASKED,
+                        choices=[m.value for m in InferenceMode],
                         help='Inference mode (determines expected output filenames)')
     parser.add_argument('--write-missing', type=str, help='Write missing manifest lines to this file')
     parser.add_argument('--workers', type=int, default=DEFAULT_WORKERS,

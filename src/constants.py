@@ -70,6 +70,24 @@ BRIDGE_TIMEOUT = 150
 AWS_MAX_RETRIES = 3
 
 
+# --- Typed contracts (lightweight enums — no heavy deps) ---
+from enum import Enum
+
+
+class InferenceResult(Enum):
+    """Outcome of a single bridge inference call."""
+    SUCCESS = "success"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class InferenceMode(Enum):
+    """Output mode for bridge classification inference."""
+    RAW = "raw"
+    MASKED = "masked"
+    BOTH = "both"
+
+
 # --- Timeout machinery (lightweight — no spconv/torch dependency) ---
 import signal
 from contextlib import contextmanager

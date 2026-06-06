@@ -429,6 +429,7 @@ def process_bridge(
         if np.sum(fit_mask) < config.min_points_for_ransac:
             return {
                 'success': False,
+                'reason': FailureReason.RANSAC_INSUFFICIENT,
                 'error': f'Not enough points for RANSAC fitting ({np.sum(fit_mask)} < {config.min_points_for_ransac})',
                 'original_arrays': original_arrays
             }
@@ -442,6 +443,7 @@ def process_bridge(
         if len(np.unique(xy_fit, axis=0)) < config.ransac_min_samples:
             return {
                 'success': False,
+                'reason': FailureReason.RANSAC_INSUFFICIENT,
                 'error': f'Not enough UNIQUE points for RANSAC',
                 'original_arrays': original_arrays
             }
@@ -459,6 +461,7 @@ def process_bridge(
         except Exception as e:
             return {
                 'success': False,
+                'reason': FailureReason.RANSAC_FAILED,
                 'error': f'RANSAC fitting failed: {str(e)}',
                 'original_arrays': original_arrays
             }
@@ -466,6 +469,7 @@ def process_bridge(
         if np.sum(inlier_mask) < config.min_ransac_inliers:
             return {
                 'success': False,
+                'reason': FailureReason.RANSAC_LOW_INLIERS,
                 'error': f'Not enough RANSAC inliers ({np.sum(inlier_mask)} < {config.min_ransac_inliers})',
                 'original_arrays': original_arrays
             }
@@ -483,6 +487,7 @@ def process_bridge(
         except Exception as e:
             return {
                 'success': False,
+                'reason': FailureReason.HULL_FAILED,
                 'error': f'Convex hull generation failed: {str(e)}',
                 'original_arrays': original_arrays
             }
@@ -512,6 +517,7 @@ def process_bridge(
         if rmse_inliers > config.max_rmse:
             return {
                 'success': False,
+                'reason': FailureReason.HIGH_RMSE,
                 'error': f'Inlier RMSE too high ({rmse_inliers:.3f}m > {config.max_rmse}m)',
                 'original_arrays': original_arrays
             }
@@ -524,6 +530,7 @@ def process_bridge(
         if is_curved:
             return {
                 'success': False,
+                'reason': FailureReason.CURVED,
                 'error': f'Bridge is curved/arched (max deviation: {deviation:.3f}m)',
                 'original_arrays': original_arrays
             }
@@ -556,7 +563,8 @@ def process_bridge(
         }
 
     except Exception as e:
-        out = {'success': False, 'error': f'Exception during processing: {str(e)}'}
+        out = {'success': False, 'reason': FailureReason.EXCEPTION,
+               'error': f'Exception during processing: {str(e)}'}
         if original_arrays is not None:
             out['original_arrays'] = original_arrays
         return out

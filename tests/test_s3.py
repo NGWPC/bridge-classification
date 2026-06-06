@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import MagicMock
 from botocore.exceptions import ClientError
 
+from src.constants import InferenceMode
 from src.s3_client import parse_s3_uri
 from src.s3_paths import resolve_input_key, resolve_output_keys
 
@@ -32,21 +33,21 @@ class TestParseS3Uri:
 
 class TestResolveOutputKeys:
     def test_raw_mode_primary_key(self):
-        result = resolve_output_keys("s3://bucket/output", "02050206/bridge_123.laz", ".laz", "raw")
+        result = resolve_output_keys("s3://bucket/output", "02050206/bridge_123.laz", ".laz", InferenceMode.RAW)
         assert result["primary"] == "s3://bucket/output/02050206/bridge_123_predicted.laz"
 
     def test_masked_mode_primary_key(self):
-        result = resolve_output_keys("s3://bucket/output", "02050206/bridge_123.laz", ".laz", "masked")
+        result = resolve_output_keys("s3://bucket/output", "02050206/bridge_123.laz", ".laz", InferenceMode.MASKED)
         assert result["primary"] == "s3://bucket/output/02050206/bridge_123_bridge_masked.laz"
 
     def test_both_mode_has_primary_and_masked(self):
-        result = resolve_output_keys("s3://bucket/output", "02050206/bridge_123.laz", ".laz", "both")
+        result = resolve_output_keys("s3://bucket/output", "02050206/bridge_123.laz", ".laz", InferenceMode.BOTH)
         assert "primary" in result
         assert "masked" in result
 
     def test_without_extension_in_manifest_line(self):
         """Manifest lines without extension should still produce correct keys."""
-        result = resolve_output_keys("output", "02050206/bridge_123", ".laz", "raw")
+        result = resolve_output_keys("output", "02050206/bridge_123", ".laz", InferenceMode.RAW)
         assert result["primary"] == "output/02050206/bridge_123_predicted.laz"
 
 
