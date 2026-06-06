@@ -375,7 +375,7 @@ Loads a trained checkpoint, classifies a raw LAS/LAZ file, and writes a classifi
 | Function                                                         | Description                                                            |
 | ---------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | `load_las(filepath)`                                             | PDAL read → returns `(points, intensities, metadata, original_arrays)` |
-| `save_las(output_path, original_arrays, labels, metadata)`       | Updates `Classification` field, writes via PDAL                        |
+| `save_las(output_path, original_arrays, labels)`                 | Updates `Classification` field, writes via PDAL                        |
 | `load_model(checkpoint_path, device)`                            | Loads SparseUNet from Lightning or raw checkpoint. Auto-detects `base_channels` from checkpoint `hyper_parameters` (falls back to 16). |
 | `run_inference(model, input_path, output_path, ...)`             | Classify a single file. Returns `InferenceResult` (`SUCCESS`, `FAILED`, or `SKIPPED`). |
 | `apply_bridge_mask(original_classification, point_labels_model)` | Bridge deck only mask: model class 2 → ASPRS 17 overlaid on original   |
