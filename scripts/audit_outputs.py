@@ -34,6 +34,7 @@ import os
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, Tuple
 
 # Add project root to path so we can import from src/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -44,7 +45,7 @@ from src.s3_paths import resolve_extension, resolve_output_keys
 DEFAULT_WORKERS = 200
 
 
-def check_line(thread_local, profile, bucket, input_prefix, output_prefix, mode, line):
+def check_line(thread_local: threading.local, profile: str, bucket: str, input_prefix: str, output_prefix: str, mode: Any, line: str) -> Tuple[str, bool]:
     """Check whether all expected outputs exist for a single manifest line.
 
     Creates a per-thread S3 client on first use (boto3 clients are not thread-safe).
@@ -62,7 +63,7 @@ def check_line(thread_local, profile, bucket, input_prefix, output_prefix, mode,
     return line, all_exist
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description='Audit bridge classification outputs in S3')
     parser.add_argument('--manifest', type=str, required=True, help='S3 URI of manifest file')
     parser.add_argument('--bucket', type=str, required=True, help='S3 bucket for outputs')

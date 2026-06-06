@@ -35,7 +35,7 @@ import shlex
 import subprocess
 import argparse
 from pathlib import Path
-from typing import Dict, Tuple, List, Optional
+from typing import List, Optional
 
 import numpy as np
 
@@ -79,12 +79,12 @@ from src.dataset import BridgeDataset, sparse_collate_fn
 class DiceLoss(nn.Module):
     """Per-class Dice loss averaged across classes. Directly optimizes overlap (IoU proxy)."""
 
-    def __init__(self, num_classes=NUM_CLASSES, smooth=1.0):
+    def __init__(self, num_classes: int = NUM_CLASSES, smooth: float = 1.0):
         super().__init__()
         self.num_classes = num_classes
         self.smooth = smooth
 
-    def forward(self, logits, targets):
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         probs = torch.softmax(logits, dim=1)
         targets_onehot = torch.nn.functional.one_hot(targets, self.num_classes).float()
         intersection = (probs * targets_onehot).sum(dim=0)
@@ -147,11 +147,11 @@ class BridgeLightningModule(LightningModule):
         if use_dice_loss:
             self.dice_criterion = DiceLoss(num_classes=num_classes)
 
-    def forward(self, x):
+    def forward(self, x: 'spconv.SparseConvTensor') -> torch.Tensor:
         """Forward pass."""
         return self.model(x)
 
-    def _common_step(self, batch, batch_idx, prefix):
+    def _common_step(self, batch: dict, batch_idx: int, prefix: str) -> Optional[torch.Tensor]:
         """
         Shared logic for train and validation.
 
@@ -260,15 +260,15 @@ class BridgeLightningModule(LightningModule):
             torch.cuda.empty_cache()
             return None
 
-    def training_step(self, batch, batch_idx):
+    def training_step(self, batch: dict, batch_idx: int) -> Optional[torch.Tensor]:
         """Training step."""
         return self._common_step(batch, batch_idx, "train")
 
-    def validation_step(self, batch, batch_idx):
+    def validation_step(self, batch: dict, batch_idx: int) -> Optional[torch.Tensor]:
         """Validation step."""
         return self._common_step(batch, batch_idx, "val")
 
-    def configure_optimizers(self):
+    def configure_optimizers(self) -> dict:
         """Configure optimizer."""
         optimizer = optim.AdamW(
             filter(lambda p: p.requires_grad, self.parameters()),
@@ -427,7 +427,7 @@ class BridgeDataModule(LightningDataModule):
         )
 
 
-def save_network_graph(model, save_dir, filename="network_architecture"):
+def save_network_graph(model: nn.Module, save_dir: str, filename: str = "network_architecture") -> None:
     """
     Traces the model on GPU (required for spconv) and saves the graph as PNG.
     """
@@ -491,7 +491,7 @@ def save_network_graph(model, save_dir, filename="network_architecture"):
         torch.cuda.empty_cache()
 
 
-def visualize_voxelization(data_dir: str, sample_idx: int = 0, voxel_size: float = 0.1):
+def visualize_voxelization(data_dir: str, sample_idx: int = 0, voxel_size: float = 0.1) -> None:
     """
     Visualize original vs voxelized point cloud for a sample bridge.
 
@@ -608,7 +608,7 @@ def visualize_voxelization(data_dir: str, sample_idx: int = 0, voxel_size: float
     plt.show()
 
 
-def main():
+def main() -> None:
     """Main entry point with command-line argument parsing."""
     pl.seed_everything(27, workers=True)
 

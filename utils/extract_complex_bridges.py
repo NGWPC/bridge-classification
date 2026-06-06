@@ -22,10 +22,9 @@ import argparse
 import csv
 import os
 import re
-import random
 import sys
-from collections import defaultdict
 from pathlib import Path, PurePosixPath
+from typing import Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from src.lidar_utils import stratified_sample, parse_bridge_stem
@@ -37,7 +36,7 @@ CURVED_PATTERN = re.compile(
 )
 
 
-def parse_logs(log_dir):
+def parse_logs(log_dir: str) -> tuple:
     """Parse all log files in a directory for curved/arched rejections.
 
     Returns:
@@ -74,7 +73,7 @@ def parse_logs(log_dir):
     return entries, raw_count
 
 
-def deduplicate(entries):
+def deduplicate(entries: list) -> list:
     """Deduplicate by HUC+OSM ID, keeping entry with highest deviation."""
     best = {}
     for entry in entries:
@@ -84,7 +83,7 @@ def deduplicate(entries):
     return list(best.values())
 
 
-def load_exclude_ids(filepath):
+def load_exclude_ids(filepath: str) -> set:
     """Load bridge IDs from a split file, return set of (huc, osm_id) tuples."""
     exclude = set()
     with open(filepath, "r") as f:
@@ -101,7 +100,7 @@ def load_exclude_ids(filepath):
     return exclude
 
 
-def list_s3_source_keys(s3_uri, profile=None):
+def list_s3_source_keys(s3_uri: str, profile: Optional[str] = None) -> set:
     """List all .laz files under an S3 prefix and extract bridge identifiers.
 
     Args:
@@ -140,7 +139,7 @@ def list_s3_source_keys(s3_uri, profile=None):
     return source_keys
 
 
-def validate_against_source(entries, source_keys):
+def validate_against_source(entries: list, source_keys: set) -> tuple:
     """Check which entries have source data available in S3.
 
     Adds 'source_available' field to each entry.
@@ -161,7 +160,7 @@ def validate_against_source(entries, source_keys):
     return found, missing
 
 
-def write_csv(entries, filepath, include_source=False):
+def write_csv(entries: list, filepath: str, include_source: bool = False) -> None:
     """Write entries to CSV."""
     filepath = Path(filepath)
     filepath.parent.mkdir(parents=True, exist_ok=True)
@@ -176,7 +175,7 @@ def write_csv(entries, filepath, include_source=False):
     print(f"  Wrote {len(entries)} rows to {filepath}")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Extract complex bridge list from processing logs")
     parser.add_argument("--log-dirs", nargs="+", default=["logs/server-logs/"],
                         help="Directories containing processing log files")

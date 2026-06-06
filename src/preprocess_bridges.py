@@ -241,7 +241,7 @@ def process_huc_folder(huc_dir: Path, output_base_dir: Path, skip_existing: bool
     return results
 
 
-def main():
+def main() -> None:
     """Main entry point with command-line argument parsing."""
     parser = argparse.ArgumentParser(
         description='Normalize bridge lidar data per bridge with class remapping and coordinate normalization'

@@ -38,7 +38,7 @@ from src.gpkg_utils import (
 )
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Prepare a pipeline run from a flat bridge GeoPackage"
     )

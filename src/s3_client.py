@@ -5,6 +5,7 @@ Pure S3 logic, no domain-specific code (e.g. no LAS/point cloud handling here).
 """
 
 import os
+from typing import Any, Iterator, Optional, Tuple
 
 import boto3
 from botocore.config import Config as BotoConfig
@@ -13,7 +14,7 @@ from botocore.exceptions import ClientError
 from src.constants import AWS_MAX_RETRIES
 
 
-def create_s3_client(profile=None):
+def create_s3_client(profile: Optional[str] = None) -> Any:
     """Create a boto3 S3 client with standard retry config.
 
     Args:
@@ -28,14 +29,14 @@ def create_s3_client(profile=None):
     ))
 
 
-def parse_s3_uri(uri):
+def parse_s3_uri(uri: str) -> Tuple[str, str]:
     """Split 's3://bucket/key' into (bucket, key)."""
     path = uri[5:]  # strip 's3://'
     bucket, _, key = path.partition('/')
     return bucket, key
 
 
-def object_exists(s3_client, bucket, key):
+def object_exists(s3_client: Any, bucket: str, key: str) -> bool:
     """Return True if the S3 object exists, False on 404; re-raises other errors."""
     try:
         s3_client.head_object(Bucket=bucket, Key=key)
@@ -46,18 +47,18 @@ def object_exists(s3_client, bucket, key):
         raise
 
 
-def download_file(s3_client, bucket, key, local_path):
+def download_file(s3_client: Any, bucket: str, key: str, local_path: str) -> None:
     """Download an S3 object to a local path, creating parent directories as needed."""
     os.makedirs(os.path.dirname(local_path), exist_ok=True)
     s3_client.download_file(bucket, key, local_path)
 
 
-def upload_file(s3_client, local_path, bucket, key):
+def upload_file(s3_client: Any, local_path: str, bucket: str, key: str) -> None:
     """Upload a local file to S3."""
     s3_client.upload_file(local_path, bucket, key)
 
 
-def stream_manifest_lines(s3_client, manifest_uri):
+def stream_manifest_lines(s3_client: Any, manifest_uri: str) -> Iterator[str]:
     """Stream a manifest file from S3, yielding non-empty stripped lines.
 
     Args:

@@ -91,6 +91,7 @@ class InferenceMode(Enum):
 # --- Timeout machinery (lightweight — no spconv/torch dependency) ---
 import signal
 from contextlib import contextmanager
+from typing import Any, Iterator
 
 
 class BridgeTimeout(BaseException):
@@ -98,12 +99,12 @@ class BridgeTimeout(BaseException):
     pass
 
 
-def _timeout_handler(signum, frame):
+def _timeout_handler(signum: int, frame: Any) -> None:
     raise BridgeTimeout()
 
 
 @contextmanager
-def bridge_timeout_guard(seconds):
+def bridge_timeout_guard(seconds: float) -> Iterator[None]:
     """SIGALRM-based wall-clock timeout. Raises BridgeTimeout after `seconds`.
 
     Note: SIGALRM is delivered but the Python handler only fires when the

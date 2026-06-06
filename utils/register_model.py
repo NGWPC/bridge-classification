@@ -30,6 +30,7 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import yaml
 
@@ -38,7 +39,7 @@ from src.s3_client import create_s3_client, upload_file
 from src.model_registry import load_registry, upload_registry
 
 
-def find_best_checkpoint(checkpoints_dir):
+def find_best_checkpoint(checkpoints_dir: str) -> Optional['Path']:
     """Find the best checkpoint by metric value in the filename.
 
     Expects filenames like: bridge-unet-epoch=XX-val_deck_iou=YY.YYYY.ckpt
@@ -71,7 +72,7 @@ def find_best_checkpoint(checkpoints_dir):
     return scored[0][0]
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Register a trained model to the S3 model registry")
     parser.add_argument("--exp-dir", required=True, help="Path to Lightning experiment version directory")
     parser.add_argument("--checkpoint", default="best", help="'best' (default), 'last', or a specific filename")

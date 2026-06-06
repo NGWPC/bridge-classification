@@ -84,7 +84,7 @@ class BridgeProcessingConfig:
     max_rmse: float = 0.30
 
     # Classification Rules
-    ignore_classes: List[int] = None  # Will default to [7, 9, 18]
+    ignore_classes: Optional[List[int]] = None  # Will default to [7, 9, 18]
     bridge_deck_class: int = 17
     high_noise_class: int = 18
     deck_z_max: float = 0.20

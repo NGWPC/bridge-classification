@@ -49,7 +49,7 @@ TARGET_OSMIDS = [
 BUFFER_METERS = 10
 
 
-def run_weak_supervision_pipeline():
+def run_weak_supervision_pipeline() -> None:
     print(f"Loading geometry from {GPKG_PATH}...")
 
     try:
