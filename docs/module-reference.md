@@ -440,6 +440,9 @@ Generic S3 operations — reusable across any S3 project. No bridge-specific kno
 | `object_exists(s3_client, bucket, key)` | Check if S3 object exists via `head_object` (returns bool) |
 | `download_file(s3_client, bucket, key, local_path)` | Download S3 object, creating parent dirs as needed |
 | `upload_file(s3_client, local_path, bucket, key)` | Upload local file to S3 |
+| `upload_json(s3_client, data, bucket, key)` | Serialize data as JSON and upload to S3 via temp file |
+| `upload_text(s3_client, text, bucket, key)` | Upload text string to S3 via temp file |
+| `download_json(s3_client, bucket, key)` | Download JSON file from S3 and return parsed data |
 | `stream_manifest_lines(s3_client, manifest_uri)` | Generator yielding non-empty stripped lines from an S3 text file |
 
 No CLI. Imported by model_registry, register_model, promote_model, evaluate_model, batch_entrypoint, and others.
@@ -464,8 +467,21 @@ Bridge-specific S3 path conventions for inference I/O. Resolves manifest lines t
 | `resolve_extension(s3_client, bucket, input_prefix, manifest_line)` | Determine file extension by probing S3 (falls back to `.laz`) |
 | `resolve_output_keys(output_prefix, manifest_line, ext, mode)` | Compute expected output S3 key(s) by mode. Returns dict with `primary` and optionally `masked` |
 
-No CLI. Imported by batch_entrypoint, audit_outputs.
+No CLI. Imported by batch_entrypoint, s3_audit.
 
+---
+
+### `src/s3_audit.py`
+
+S3 output audit for bridge inference runs. Thread-pool orchestrator that checks whether expected output files exist in S3. Uses bridge path conventions from `s3_paths` and generic S3 ops from `s3_client`.
+
+**Functions:**
+
+| Function | Description |
+|----------|-------------|
+| `audit_s3_outputs(profile, bucket, input_prefix, output_prefix, mode, manifest_lines, workers, progress_interval)` | Thread-pool audit: check S3 for expected outputs. Returns `(found_count, missing_lines)`. |
+
+No CLI. Imported by `audit_outputs.py`, `post_run_report.py`.
 
 ---
 
@@ -916,6 +932,7 @@ AWS Batch entrypoint — per-bridge processing loop with SPOT handling. Imports 
 - Skip-if-exists resumability via S3 `head_object`
 - Mixed .laz/.las support via S3 extension probing
 - Structured CloudWatch logging with per-bridge timing
+- `MODEL_LOADED uri=...` log confirms which model checkpoint ran
 
 ---
 
@@ -937,6 +954,8 @@ Submit single or array Batch jobs. Reads terraform outputs for AWS config, count
 | `--env`          | []                 | Environment override as KEY=VALUE (repeatable) |
 | `--job-name`     | `bridge-inference` | Job name prefix                                |
 | `--profile`      | None               | AWS profile for S3 manifest access             |
+| `--bucket`       | None               | S3 bucket for saving `_run_config.json`        |
+| `--output-prefix`| None               | S3 output prefix for saving `_run_config.json` |
 
 
 ---
@@ -958,5 +977,27 @@ Post-run verification — checks all expected outputs exist in S3. Uses parallel
 | `--write-missing` | None         | Write missing manifest lines to this file         |
 | `--workers`       | 200          | Parallel S3 check workers                         |
 | `--profile`       | None         | AWS profile                                       |
+| `--save-to-s3`    | False        | Upload audit summary JSON to `{output-prefix}/_audit_results.json` |
+
+
+---
+
+### `scripts/post_run_report.py`
+
+Post-run report generator. Reads `_run_config.json` (saved by `submit_batch_job.py`), audits S3 outputs, queries CloudWatch for per-child summaries and per-bridge timing, and saves `_run_report.json` to the output prefix.
+
+**CLI arguments:**
+
+
+| Argument          | Default      | Description                                          |
+| ----------------- | ------------ | ---------------------------------------------------- |
+| `--bucket`        | *(required)* | S3 bucket                                            |
+| `--output-prefix` | *(required)* | S3 output prefix (where predictions are)             |
+| `--input-prefix`  | `""`         | S3 input prefix (for extension probing during audit) |
+| `--mode`          | `masked`     | Inference mode (determines expected filenames)       |
+| `--audit-workers` | 200          | Parallel S3 audit workers                            |
+| `--skip-timing`   | False        | Skip per-bridge timing extraction (faster)           |
+| `--region`        | `us-east-1`  | AWS region for Batch and CloudWatch                  |
+| `--profile`       | None         | AWS profile                                          |
 
 

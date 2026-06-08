@@ -19,6 +19,10 @@ Usage:
 
     # Single job (no array)
     python scripts/submit_batch_job.py --single
+
+    # With run config tracking (saves _run_config.json to S3 for post-run reporting)
+    python scripts/submit_batch_job.py --manifest s3://bucket/manifest.txt \
+        --bucket fimc-data --output-prefix bridge-classification/runs/my-run/predictions
 """
 
 import argparse
@@ -27,14 +31,14 @@ import math
 import os
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import boto3
 
 # Add project root to path so we can import from src/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from src.s3_client import create_s3_client, stream_manifest_lines
+from src.s3_client import create_s3_client, stream_manifest_lines, upload_json
 
 MAX_ARRAY_SIZE = 10_000  # AWS Batch hard limit
 DEFAULT_CHUNK_TARGET = 60
@@ -120,6 +124,8 @@ def main() -> None:
     parser.add_argument('--job-name', type=str, default='bridge-inference',
                         help='Job name prefix (default: bridge-inference)')
     parser.add_argument('--profile', type=str, help='AWS profile override for S3 access')
+    parser.add_argument('--bucket', type=str, help='S3 bucket for saving run config (required for run tracking)')
+    parser.add_argument('--output-prefix', type=str, help='S3 output prefix for saving run config (required for run tracking)')
     args = parser.parse_args()
 
     # --- Read terraform config ---
@@ -248,6 +254,37 @@ def main() -> None:
     print(f"\nJob submitted: {full_job_name}")
     print(f"Job ID: {job_id}")
     print(f"Monitor at: https://console.aws.amazon.com/batch/home?region={aws_region}#jobs")
+
+    # --- Save run config to S3 ---
+    if args.bucket and args.output_prefix:
+        git_commit = "unknown"
+        try:
+            git_commit = subprocess.check_output(
+                ['git', 'rev-parse', '--short', 'HEAD'], text=True
+            ).strip()
+        except Exception:
+            pass
+
+        run_config = {
+            "job_id": job_id,
+            "job_name": full_job_name,
+            "submitted_at": datetime.now(timezone.utc).isoformat(),
+            "manifest_uri": manifest,
+            "s3_bucket": args.bucket,
+            "s3_output_prefix": args.output_prefix,
+            "array_size": array_size,
+            "chunk_target": args.chunk_target,
+            "total_bridges": total_files,
+            "spot_rate_usd": SPOT_PRICE_PER_HOUR,
+            "git_commit": git_commit,
+            "env_overrides": env_overrides,
+        }
+
+        config_key = f"{args.output_prefix}/_run_config.json"
+        upload_json(s3, run_config, args.bucket, config_key)
+        print(f"Run config saved: s3://{args.bucket}/{config_key}")
+    else:
+        print("\nTip: pass --bucket and --output-prefix to save run config to S3 for post-run reporting")
 
 
 if __name__ == '__main__':

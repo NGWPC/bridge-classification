@@ -27,40 +27,28 @@ Usage:
 
     # Use a specific AWS profile
     python scripts/audit_outputs.py ... --profile Data
+
+    # Save audit results to S3
+    python scripts/audit_outputs.py \
+        --manifest s3://bucket/manifest.txt \
+        --bucket my-bucket \
+        --output-prefix predictions/v3 \
+        --mode masked \
+        --save-to-s3
 """
 
 import argparse
 import os
 import sys
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Tuple
+from datetime import datetime, timezone
 
 # Add project root to path so we can import from src/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from src.constants import InferenceMode
-from src.s3_client import create_s3_client, object_exists, stream_manifest_lines
-from src.s3_paths import resolve_extension, resolve_output_keys
+from src.s3_audit import audit_s3_outputs
+from src.s3_client import create_s3_client, stream_manifest_lines, upload_json
 
 DEFAULT_WORKERS = 200
-
-
-def check_line(thread_local: threading.local, profile: str, bucket: str, input_prefix: str, output_prefix: str, mode: Any, line: str) -> Tuple[str, bool]:
-    """Check whether all expected outputs exist for a single manifest line.
-
-    Creates a per-thread S3 client on first use (boto3 clients are not thread-safe).
-
-    Returns:
-        (line, all_exist) tuple.
-    """
-    if not hasattr(thread_local, 's3'):
-        thread_local.s3 = create_s3_client(profile)
-    s3 = thread_local.s3
-
-    ext = resolve_extension(s3, bucket, input_prefix, line) if input_prefix else '.laz'
-    output_keys = resolve_output_keys(output_prefix, line, ext, mode)
-    all_exist = all(object_exists(s3, bucket, k) for k in output_keys.values())
-    return line, all_exist
 
 
 def main() -> None:
@@ -76,43 +64,28 @@ def main() -> None:
     parser.add_argument('--workers', type=int, default=DEFAULT_WORKERS,
                         help=f'Parallel S3 check workers (default: {DEFAULT_WORKERS})')
     parser.add_argument('--profile', type=str, help='AWS profile')
+    parser.add_argument('--save-to-s3', action='store_true',
+                        help='Upload audit summary JSON to S3 at {output-prefix}/_audit_results.json')
     args = parser.parse_args()
 
-    # Use a single session only for reading the manifest (single-threaded)
     s3_main = create_s3_client(args.profile)
 
-    # Read manifest
     lines = list(stream_manifest_lines(s3_main, args.manifest))
     total = len(lines)
     print(f"Manifest: {total} entries")
     print(f"Checking outputs in s3://{args.bucket}/{args.output_prefix}/ "
           f"(mode={args.mode}, workers={args.workers})")
 
-    thread_local = threading.local()
-    found = 0
-    missing_lines = []
-    completed = 0
-    lock = threading.Lock()
-
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futures = {
-            pool.submit(
-                check_line, thread_local, args.profile,
-                args.bucket, args.input_prefix, args.output_prefix, args.mode, line
-            ): line
-            for line in lines
-        }
-
-        for future in as_completed(futures):
-            line, all_exist = future.result()  # re-raises any exception from the thread
-            with lock:
-                completed += 1
-                if all_exist:
-                    found += 1
-                else:
-                    missing_lines.append(line)
-                if completed % 10000 == 0:
-                    print(f"  Checked {completed}/{total} — {found} found, {len(missing_lines)} missing")
+    found, missing_lines = audit_s3_outputs(
+        profile=args.profile,
+        bucket=args.bucket,
+        input_prefix=args.input_prefix,
+        output_prefix=args.output_prefix,
+        mode=args.mode,
+        manifest_lines=lines,
+        workers=args.workers,
+        progress_interval=10000,
+    )
 
     missing = len(missing_lines)
     print(f"\nResults: {found} found, {missing} missing out of {total} total")
@@ -123,6 +96,23 @@ def main() -> None:
                 f.write(line + '\n')
         print(f"Missing manifest written to: {args.write_missing}")
         print(f"Re-submit with: python scripts/submit_batch_job.py --manifest <upload-this-file>")
+
+    if args.save_to_s3:
+        audit_result = {
+            'audited_at': datetime.now(timezone.utc).isoformat(),
+            'manifest_uri': args.manifest,
+            'total': total,
+            'found': found,
+            'missing': missing,
+        }
+        if missing_lines:
+            audit_result['missing_entries'] = missing_lines[:1000]
+            if len(missing_lines) > 1000:
+                audit_result['missing_entries_truncated'] = True
+
+        audit_key = f"{args.output_prefix}/_audit_results.json"
+        upload_json(s3_main, audit_result, args.bucket, audit_key)
+        print(f"Audit results saved: s3://{args.bucket}/{audit_key}")
 
     if missing > 0:
         sys.exit(1)
