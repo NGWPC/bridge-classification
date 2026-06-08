@@ -147,6 +147,7 @@ def main() -> None:
     device = torch.device('cuda')
     log(f"Using device: {device}", child_index=idx)
     model = load_model(str(model_path), device)
+    log(f"MODEL_LOADED uri={cfg['s3_model_uri']}", child_index=idx)
 
     # --- 4. Per-bridge processing loop ---
     mode = cfg['inference_mode']

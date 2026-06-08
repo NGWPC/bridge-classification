@@ -4,7 +4,9 @@ Generic S3 operations — client factory, file I/O, URI parsing.
 Pure S3 logic, no domain-specific code (e.g. no LAS/point cloud handling here).
 """
 
+import json
 import os
+import tempfile
 from typing import Any, Iterator, Optional, Tuple
 
 import boto3
@@ -56,6 +58,40 @@ def download_file(s3_client: Any, bucket: str, key: str, local_path: str) -> Non
 def upload_file(s3_client: Any, local_path: str, bucket: str, key: str) -> None:
     """Upload a local file to S3."""
     s3_client.upload_file(local_path, bucket, key)
+
+
+def upload_json(s3_client: Any, data: Any, bucket: str, key: str) -> None:
+    """Serialize data as JSON and upload to S3 via temp file."""
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp:
+        json.dump(data, tmp, indent=2, default=str)
+        tmp_path = tmp.name
+    try:
+        upload_file(s3_client, tmp_path, bucket, key)
+    finally:
+        os.unlink(tmp_path)
+
+
+def upload_text(s3_client: Any, text: str, bucket: str, key: str) -> None:
+    """Upload a text string to S3 via temp file."""
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as tmp:
+        tmp.write(text)
+        tmp_path = tmp.name
+    try:
+        upload_file(s3_client, tmp_path, bucket, key)
+    finally:
+        os.unlink(tmp_path)
+
+
+def download_json(s3_client: Any, bucket: str, key: str) -> Any:
+    """Download a JSON file from S3 and return parsed data."""
+    with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        download_file(s3_client, bucket, key, tmp_path)
+        with open(tmp_path) as f:
+            return json.load(f)
+    finally:
+        os.unlink(tmp_path)
 
 
 def stream_manifest_lines(s3_client: Any, manifest_uri: str) -> Iterator[str]:

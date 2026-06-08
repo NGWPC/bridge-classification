@@ -16,6 +16,7 @@ Each array child downloads the manifest and model, computes its chunk, then proc
 | `scripts/submit_batch_job.py`        | Submit single or array batch jobs                                  |
 | `scripts/batch_entrypoint.py`        | Container entrypoint — per-bridge processing loop                  |
 | `scripts/audit_outputs.py`           | Post-run verification — checks all expected outputs exist in S3    |
+| `scripts/post_run_report.py`         | Post-run report — audit + CloudWatch aggregation + `_run_report.json` |
 | `src/s3_client.py`                   | Generic S3 utilities (parse URIs, download/upload)                 |
 | `src/s3_paths.py`                    | Bridge-specific S3 path resolution (manifest → S3 keys)           |
 
@@ -159,6 +160,16 @@ python scripts/submit_batch_job.py \
 
 The `--profile` flag controls which AWS profile is used to read the manifest from S3 (for line counting).
 
+Pass `--bucket` and `--output-prefix` to save `_run_config.json` to S3 for post-run reporting:
+
+```bash
+python scripts/submit_batch_job.py \
+    --manifest s3://fimc-data/.../manifest.txt \
+    --bucket fimc-data \
+    --output-prefix bridge-classification/runs/my-run/predictions \
+    --profile Data
+```
+
 ### 5. Monitor
 
 The submit script prints a link to the Batch console. Logs are written to CloudWatch log group `/aws/batch/bridge-classifier` with structured fields for querying.
@@ -268,7 +279,23 @@ python scripts/submit_batch_job.py \
 
 Re-submission is safe — skip-if-exists means already-completed bridges are skipped.
 
-### 7. Cleanup
+### 7. Post-Run Report
+
+After all children complete, generate a comprehensive report with audit results, CloudWatch aggregation, and per-bridge timing:
+
+```bash
+python scripts/post_run_report.py \
+    --bucket fimc-data \
+    --output-prefix bridge-classification/runs/my-run/predictions \
+    --mode masked \
+    --profile data
+```
+
+This reads `_run_config.json` (saved at submission), audits S3 outputs, queries CloudWatch for SUMMARY and INFER_OK lines, and saves `_run_report.json` to the output prefix.
+
+Use `--skip-timing` for a faster report without per-bridge p50/p95 stats.
+
+### 8. Cleanup
 
 To tear down all Batch infrastructure:
 
