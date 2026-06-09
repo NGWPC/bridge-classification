@@ -108,12 +108,13 @@ def _query_cloudwatch(
 
 def query_cloudwatch_summaries(
     logs_client: Any, start_ms: int, end_ms: int
-) -> Tuple[Dict[str, int], List[float]]:
-    """Query CloudWatch for SUMMARY lines, return aggregated totals and per-child wall clock hours."""
+) -> Tuple[Dict[str, int], List[float], List[float]]:
+    """Query CloudWatch for SUMMARY lines, return aggregated totals and per-child wall clock seconds and hours."""
     totals = {
         'succeeded': 0, 'failed': 0, 'skipped_exists': 0,
         'skipped_too_few_points': 0, 'download_failed': 0, 'total': 0,
     }
+    child_seconds: List[float] = []
     child_hours: List[float] = []
 
     def process(msg: str) -> None:
@@ -125,10 +126,11 @@ def query_cloudwatch_summaries(
             totals['skipped_too_few_points'] += int(match.group(4))
             totals['download_failed'] += int(match.group(5))
             totals['total'] += int(match.group(6))
+            child_seconds.append(float(match.group(7)))
             child_hours.append(float(match.group(8)))
 
     _query_cloudwatch(logs_client, 'SUMMARY', start_ms, end_ms, process)
-    return totals, child_hours
+    return totals, child_seconds, child_hours
 
 
 def query_cloudwatch_bridge_times(
@@ -233,7 +235,7 @@ def main() -> None:
 
     if start_ms:
         print("\nQuerying CloudWatch for SUMMARY lines...")
-        totals, child_hours = query_cloudwatch_summaries(logs_client, start_ms, end_ms)
+        totals, child_seconds, child_hours = query_cloudwatch_summaries(logs_client, start_ms, end_ms)
         summary_count = len(child_hours)
         print(f"Found {summary_count} child summaries (expected {expected_array_size})")
         if summary_count < expected_array_size:
@@ -284,6 +286,27 @@ def main() -> None:
 
     # --- 5. Build report ---
     job_info_clean = {k: v for k, v in job_info.items() if not k.endswith('_ms')}
+
+    child_timing_section = {
+        'children_reported': len(child_hours),
+        'children_expected': expected_array_size,
+        'min_seconds': round(min(child_seconds), 1) if child_seconds else None,
+        'max_seconds': round(max(child_seconds), 1) if child_seconds else None,
+        'avg_seconds': round(sum(child_seconds) / len(child_seconds), 1) if child_seconds else None,
+        'total_child_hours': round(sum(child_hours), 4) if child_hours else None,
+    }
+
+    spot_rate = run_config.get('spot_rate_usd', 0)
+    cost_estimate = None
+    if child_hours and spot_rate:
+        total_hours = sum(child_hours)
+        cost_estimate = {
+            'total_child_hours': round(total_hours, 4),
+            'spot_rate_usd': spot_rate,
+            'estimated_compute_usd': round(total_hours * spot_rate, 2),
+            'note': 'Based on sum of child wall-clock hours x spot rate; actual billing may differ',
+        }
+
     report = {
         'reported_at': datetime.now(timezone.utc).isoformat(),
         'job': job_info_clean,
@@ -293,14 +316,9 @@ def main() -> None:
             'missing': len(missing),
         },
         'aggregated_results': totals,
-        'child_timing': {
-            'children_reported': len(child_hours),
-            'children_expected': expected_array_size,
-            'min_hours': round(min(child_hours), 2) if child_hours else None,
-            'max_hours': round(max(child_hours), 2) if child_hours else None,
-            'avg_hours': round(sum(child_hours) / len(child_hours), 2) if child_hours else None,
-        },
+        'child_timing': child_timing_section,
         'bridge_timing': timing,
+        'cost_estimate': cost_estimate,
         'run_config': run_config,
     }
 
@@ -330,14 +348,18 @@ def main() -> None:
     print(f"{'='*60}")
     print(f"Job:        {run_config.get('job_name')}")
     print(f"Status:     {job_info['status']}")
-    if 'wall_clock_hours' in job_info:
-        print(f"Duration:   {job_info['wall_clock_hours']} hours")
+    if child_seconds:
+        print(f"Children:   {len(child_seconds)} reported, "
+              f"max={round(max(child_seconds), 1)}s, avg={round(sum(child_seconds)/len(child_seconds), 1)}s")
     print(f"Audit:      {found} found, {len(missing)} missing out of {len(manifest_lines)}")
     if totals:
         print(f"Results:    {totals['succeeded']} succeeded, {totals['failed']} failed, "
               f"{totals['skipped_too_few_points']} skipped")
     if timing:
         print(f"Timing:     avg={timing['avg_seconds']}s, p50={timing['p50_seconds']}s, p95={timing['p95_seconds']}s")
+    if cost_estimate:
+        print(f"Cost est:   ${cost_estimate['estimated_compute_usd']:.2f} "
+              f"({cost_estimate['total_child_hours']:.4f} hrs x ${spot_rate}/hr)")
     print(f"Report:     s3://{args.bucket}/{report_key}")
     print(f"{'='*60}")
 
