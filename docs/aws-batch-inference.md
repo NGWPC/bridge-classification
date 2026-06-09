@@ -82,7 +82,7 @@ Copy the example and fill in your values (`terraform.tfvars` is gitignored):
 cp terraform/terraform.tfvars.example terraform/terraform.tfvars
 ```
 
-Edit `terraform/terraform.tfvars` with your S3 paths, model, and AWS settings:
+Edit `terraform/terraform.tfvars` with your S3 paths, model, and AWS settings. Examples below use `fimc-data` as the bucket — replace with your own:
 
 ```hcl
 # terraform/terraform.tfvars

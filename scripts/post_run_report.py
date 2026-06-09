@@ -11,7 +11,8 @@ Usage:
         --bucket fimc-data \
         --output-prefix bridge-classification/runs/noaa-bridges-without-tif/predictions \
         --mode masked \
-        --profile data
+        --profile Data \
+        --batch-profile test-se
 
     # With explicit input prefix (for S3 extension probing during audit):
     python scripts/post_run_report.py \
@@ -19,7 +20,8 @@ Usage:
         --output-prefix bridge-classification/runs/.../predictions \
         --input-prefix bridge-classification/runs/.../source \
         --mode masked \
-        --profile data
+        --profile Data \
+        --batch-profile test-se
 """
 
 import argparse

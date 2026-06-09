@@ -478,7 +478,7 @@ Tests run in seconds and require only numpy + boto3 (no GPU, PDAL, or conda). CI
 - Make a subfolder `usgs_entwine/` and `osm/hucs/` inside `data/` folder.
 - Download the [USGS lidar resources](https://raw.githubusercontent.com/hobuinc/usgs-lidar/refs/heads/master/boundaries/resources.geojson): `wget https://raw.githubusercontent.com/hobuinc/usgs-lidar/refs/heads/master/boundaries/resources.geojson -O data/usgs_entwine/lidar_resources.geojson`
 - HUC-level OSM data: `s3://fimc-data/bridge-classification/osm/hucs/` (organized by huc_id folder level)
-- The pipeline creates `data/ml-data/` and its subfolders when you run Steps 1–4; see [Output directory (data/ml-data)](#output-directory-dataml-data) for the full layout.
+- The pipeline creates `data/ml-data/` and its subfolders when you run Steps 1–4; see [Output directories](#output-directories) for the full layout. All paths are configurable via CLI arguments.
 
 Download and organize it to match this structure.
 
@@ -510,34 +510,51 @@ The pipeline uses the following classification scheme:
 
 ## Output Structure
 
-### Output directory (data/ml-data)
+### Output directories
 
-The directory `data/ml-data/` is the default base for pipeline outputs: download (Step 1), preprocess (Step 2), split (Step 3), optional class weights (Step 3a), and training (Step 4).
+All directory paths are CLI-configurable — the defaults shown below can be overridden with `--source-dir`, `--silver-dir`, `--output-dir`, etc. See each script's `--help` for options.
+
+The pipeline supports two directory layouts:
+
+- **Default paths** (`data/ml-data/`) — standard training workflow (Steps 1–4)
+- **Named runs** (`data/runs/<run-name>/`) — isolated runs created by `utils/prepare_run.py` (e.g., from a flat NOAA GeoPackage)
 
 ```text
-data/ml-data/
-├── source/                        # Step 1: raw LAZ per HUC
-├── silver_training/               # Step 1: weak-supervised LAZ per HUC
-├── silver_training_normalized/    # Step 2: .npy and .json per HUC
-├── training/                      # Step 3: train split (.npy, .json)
-├── validation/                    # Step 3: validation split
-├── testing/                       # Step 3: test split (+ .laz if present)
-├── gold-data/                     # Human-annotated gold bridges (by HUC)
-├── gold-data-normalized/          # Preprocessed gold (.npy + .json)
-├── gold-split/                    # Gold train/val/test split
-│   ├── training/
-│   ├── validation/
-│   └── testing/
-├── new-source-candidates/         # Output from find_new_source_candidates.py
-├── not_lidar_source/              # Bridges with no lidar (raw download only)
-├── split_manifest.json            # Step 3: split manifest
-├── split_train_ids.txt            # Step 3: train IDs
-├── split_val_ids.txt              # Step 3: validation IDs
-├── split_test_ids.txt             # Step 3: test IDs
-├── split_gold_v2_linear_ids.txt   # Gold-v2: 50 bridges sent for annotation
-├── class_weights.json             # Step 3a (optional): from calculate_weights
-└── holdout_test.txt               # Optional: fixed test IDs for split_data
+data/
+├── osm/hucs/                        # HUC bridge geometries (input)
+├── usgs_entwine/                    # Lidar source index (input)
+│
+├── <data-dir>/                      # Training pipeline output (default: ml-data)
+│   ├── source/                      # Step 1: raw LAZ per HUC
+│   ├── silver_training/             # Step 1: weak-supervised LAZ
+│   ├── silver_training_normalized/  # Step 2: .npy + .json
+│   ├── training/                    # Step 3: train split
+│   ├── validation/                  # Step 3: val split
+│   ├── testing/                     # Step 3: test split
+│   ├── gold-data/                   # Human-annotated bridges
+│   ├── gold-split/                  # Gold train/val/test
+│   └── class_weights.json           # Step 3a (optional)
+│
+└── runs/<run-name>/                 # Named runs (via prepare_run.py)
+    ├── input/                       # Original input GPKG (for reproducibility)
+    ├── hucs/                        # Per-HUC bridge geometries
+    ├── source/                      # Raw LAZ
+    ├── silver_training/             # Weak-supervised LAZ
+    ├── predictions/                 # Batch inference output
+    └── run_config.json              # Run metadata
 ```
+
+### Batch inference outputs
+
+When running inference at scale via [AWS Batch](docs/aws-batch-inference.md), the pipeline writes prediction files and two observability files to the S3 output prefix:
+
+- **`_run_config.json`** — saved at job submission by `scripts/submit_batch_job.py` (job ID, manifest URI, array size, git commit, SPOT rate estimate)
+- **`_run_report.json`** — generated after completion by `scripts/post_run_report.py` (S3 audit results, per-child and per-bridge timing, computed cost estimate, failure reasons for missing bridges)
+- **`_missing.txt`** — manifest of bridges that failed or were skipped (for re-submission)
+- Per-bridge prediction files (one per bridge, naming depends on inference mode):
+  - **masked**: `{huc}_bridge_{osmid}_{source}_bridge_masked.laz` — original ASPRS classes preserved, bridge deck points reclassified to class 17
+  - **raw**: `{huc}_bridge_{osmid}_{source}_predicted.laz` — all model class labels (0–3) written directly
+  - **both**: writes both files per bridge
 
 ### Notebooks
 
