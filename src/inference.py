@@ -317,10 +317,7 @@ def main() -> None:
     parser.add_argument('--bridge-timeout', type=float, default=150,
                         help='Seconds before a hung bridge is skipped in batch mode (default: 150, supports decimals)')
     parser.add_argument('--mode', type=InferenceMode, default=InferenceMode.MASKED,
-                        choices=[m.value for m in InferenceMode],
-                        help='Output mode: masked=bridge deck only overlaid on original lidar (default), '
-                             'raw=all model labels replace original (old behavior), '
-                             'both=save raw (_predicted.laz) and masked (_bridge_masked.laz)')
+                        help='Output mode: masked (default), raw, or both')
     args = parser.parse_args()
 
     # Validate: either single-file mode or batch mode, not both

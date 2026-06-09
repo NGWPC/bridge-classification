@@ -998,6 +998,7 @@ Post-run report generator. Reads `_run_config.json` (saved by `submit_batch_job.
 | `--audit-workers` | 200          | Parallel S3 audit workers                            |
 | `--skip-timing`   | False        | Skip per-bridge timing extraction (faster)           |
 | `--region`        | `us-east-1`  | AWS region for Batch and CloudWatch                  |
-| `--profile`       | None         | AWS profile                                          |
+| `--profile`       | None         | AWS profile for S3 operations                        |
+| `--batch-profile` | None         | AWS profile for Batch and CloudWatch (defaults to `--profile`) |
 
 

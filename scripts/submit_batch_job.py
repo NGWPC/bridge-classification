@@ -42,7 +42,7 @@ from src.s3_client import create_s3_client, stream_manifest_lines, upload_json
 
 MAX_ARRAY_SIZE = 10_000  # AWS Batch hard limit
 DEFAULT_CHUNK_TARGET = 60
-SPOT_PRICE_PER_HOUR = 0.218  # g4dn.xlarge spot estimate - https://instances.vantage.sh/aws/ec2/g4dn.xlarge?currency=USD
+SPOT_PRICE_PER_HOUR = 0.234  # g4dn.xlarge spot estimate (fluctuates) — check https://aws.amazon.com/ec2/spot/pricing/
 
 
 def get_terraform_outputs(terraform_dir: str = 'terraform') -> Dict[str, str]:

@@ -19,6 +19,7 @@ Each array child downloads the manifest and model, computes its chunk, then proc
 | `scripts/post_run_report.py`         | Post-run report — audit + CloudWatch aggregation + `_run_report.json` |
 | `src/s3_client.py`                   | Generic S3 utilities (parse URIs, download/upload)                 |
 | `src/s3_paths.py`                    | Bridge-specific S3 path resolution (manifest → S3 keys)           |
+| `src/s3_audit.py`                    | Thread-pool S3 output auditor (used by audit_outputs and post_run_report) |
 
 
 ---
@@ -160,7 +161,7 @@ python scripts/submit_batch_job.py \
 
 The `--profile` flag controls which AWS profile is used to read the manifest from S3 (for line counting).
 
-Pass `--bucket` and `--output-prefix` to save `_run_config.json` to S3 for post-run reporting:
+Pass `--bucket` and `--output-prefix` to save `_run_config.json` to S3. Optional, but required if you plan to run `post_run_report.py` afterward:
 
 ```bash
 python scripts/submit_batch_job.py \
@@ -288,10 +289,13 @@ python scripts/post_run_report.py \
     --bucket fimc-data \
     --output-prefix bridge-classification/runs/my-run/predictions \
     --mode masked \
-    --profile data
+    --profile Data \
+    --batch-profile test-se
 ```
 
-This reads `_run_config.json` (saved at submission), audits S3 outputs, queries CloudWatch for SUMMARY and INFER_OK lines, and saves `_run_report.json` to the output prefix.
+Use `--batch-profile` when your S3 and Batch/CloudWatch credentials are on different AWS profiles.
+
+This reads `_run_config.json` (saved at submission), audits S3 outputs, queries CloudWatch for SUMMARY and INFER_OK lines, queries failure reasons for missing bridges, and saves `_run_report.json` to the output prefix.
 
 Use `--skip-timing` for a faster report without per-bridge p50/p95 stats.
 
@@ -574,8 +578,8 @@ All Batch resources are tagged with `Project = bridge-classifier`. Tags propagat
 
 **Estimated costs** (printed by submit script with `--dry-run`):
 
-- g4dn.xlarge SPOT: ~$0.218/hr per child
-- 1.5M bridges at ~90s each, 10K children: ~$818 total
+- g4dn.xlarge SPOT: ~$0.234/hr per child (fluctuates — check https://aws.amazon.com/ec2/spot/pricing/)
+- Example: 218K bridges at ~90s each, ~3,650 children: ~$1,275 compute + 20% buffer = ~$1,530
 
 ---
 

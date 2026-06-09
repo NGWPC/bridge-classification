@@ -54,7 +54,11 @@ DEFAULT_AUDIT_WORKERS = 200  # must match src/s3_audit.py default
 
 
 def describe_batch_job(batch_client: Any, job_id: str) -> Dict[str, Any]:
-    """Get job status and timing from AWS Batch."""
+    """Get job status and timing from AWS Batch.
+
+    For array jobs, the parent has createdAt but not startedAt/stoppedAt
+    (those are on the children). Falls back to createdAt for time window.
+    """
     response = batch_client.describe_jobs(jobs=[job_id])
     if not response['jobs']:
         return {'status': 'NOT_FOUND'}
@@ -65,12 +69,15 @@ def describe_batch_job(batch_client: Any, job_id: str) -> Dict[str, Any]:
     }
     if 'createdAt' in job:
         result['created_at'] = datetime.fromtimestamp(job['createdAt'] / 1000, tz=timezone.utc).isoformat()
+        result['created_at_ms'] = job['createdAt']
     if 'startedAt' in job:
         result['started_at'] = datetime.fromtimestamp(job['startedAt'] / 1000, tz=timezone.utc).isoformat()
+        result['started_at_ms'] = job['startedAt']
     if 'stoppedAt' in job:
         result['stopped_at'] = datetime.fromtimestamp(job['stoppedAt'] / 1000, tz=timezone.utc).isoformat()
-        if 'startedAt' in job:
-            result['wall_clock_hours'] = round((job['stoppedAt'] - job['startedAt']) / 1000 / 3600, 2)
+        result['stopped_at_ms'] = job['stoppedAt']
+        start = job.get('startedAt', job.get('createdAt', 0))
+        result['wall_clock_hours'] = round((job['stoppedAt'] - start) / 1000 / 3600, 2)
     if 'arrayProperties' in job:
         result['array_size'] = job['arrayProperties'].get('size', 0)
     return result
@@ -155,17 +162,19 @@ def main() -> None:
     parser.add_argument('--output-prefix', type=str, required=True, help='S3 output prefix (where predictions are)')
     parser.add_argument('--input-prefix', type=str, default='', help='S3 input prefix (for extension probing during audit)')
     parser.add_argument('--mode', type=InferenceMode, default=InferenceMode.MASKED,
-                        choices=[m.value for m in InferenceMode],
-                        help='Inference mode (determines expected output filenames)')
+                        help='Inference mode: masked (default), raw, or both')
     parser.add_argument('--audit-workers', type=int, default=DEFAULT_AUDIT_WORKERS,
                         help=f'Parallel S3 audit workers (default: {DEFAULT_AUDIT_WORKERS})')
     parser.add_argument('--skip-timing', action='store_true',
                         help='Skip per-bridge timing extraction (faster, fewer CloudWatch queries)')
     parser.add_argument('--region', type=str, default='us-east-1',
                         help='AWS region for Batch and CloudWatch (default: us-east-1)')
-    parser.add_argument('--profile', type=str, help='AWS profile')
+    parser.add_argument('--profile', type=str, help='AWS profile for S3 operations')
+    parser.add_argument('--batch-profile', type=str,
+                        help='AWS profile for Batch and CloudWatch (defaults to --profile)')
     args = parser.parse_args()
 
+    batch_profile = args.batch_profile or args.profile
     s3 = create_s3_client(args.profile)
 
     # --- 1. Load run config ---
@@ -187,7 +196,7 @@ def main() -> None:
 
     # --- 2. Check job status ---
     print("\nChecking job status...")
-    session = boto3.Session(profile_name=args.profile)
+    session = boto3.Session(profile_name=batch_profile)
     batch_client = session.client('batch', region_name=args.region)
     job_info = describe_batch_job(batch_client, job_id)
     print(f"Status: {job_info['status']}")
@@ -216,11 +225,13 @@ def main() -> None:
     totals = {}
     child_hours: List[float] = []
     timing = {}
+    missing_reasons: Dict[str, str] = {}
 
-    if 'started_at' in job_info:
-        start_ms = int(datetime.fromisoformat(job_info['started_at']).timestamp() * 1000)
-        end_ms = int(datetime.fromisoformat(job_info.get('stopped_at', job_info['started_at'])).timestamp() * 1000)
+    # Array parent jobs have createdAt but not startedAt — use createdAt as fallback
+    start_ms = job_info.get('started_at_ms') or job_info.get('created_at_ms')
+    end_ms = job_info.get('stopped_at_ms') or int(datetime.now(timezone.utc).timestamp() * 1000)
 
+    if start_ms:
         print("\nQuerying CloudWatch for SUMMARY lines...")
         totals, child_hours = query_cloudwatch_summaries(logs_client, start_ms, end_ms)
         summary_count = len(child_hours)
@@ -249,13 +260,33 @@ def main() -> None:
                       f"p50={timing['p50_seconds']}s, p95={timing['p95_seconds']}s")
         else:
             print("\nSkipping per-bridge timing (--skip-timing)")
+
+        # Query failure reasons for missing bridges
+        if missing:
+            print(f"\nQuerying CloudWatch for failure reasons on {len(missing)} missing bridges...")
+            fail_pattern = re.compile(r'INFER_FAILED reason=(\S+)')
+            skip_pattern = re.compile(r'SKIP_SMALL_FILE')
+            for bridge_line in missing[:100]:
+                bridge_stem = bridge_line.split('/')[-1] if '/' in bridge_line else bridge_line
+                def _capture_reason(msg: str) -> None:
+                    fm = fail_pattern.search(msg)
+                    if fm:
+                        missing_reasons[bridge_line] = fm.group(1)
+                    elif skip_pattern.search(msg):
+                        missing_reasons[bridge_line] = 'too_few_points'
+                _query_cloudwatch(logs_client, bridge_stem, start_ms, end_ms, _capture_reason)
+            if missing_reasons:
+                print(f"Found reasons for {len(missing_reasons)} bridges:")
+                for bridge, reason in list(missing_reasons.items())[:10]:
+                    print(f"  {bridge}: {reason}")
     else:
-        print("\nWARNING: Job has no start time — skipping CloudWatch queries")
+        print("\nWARNING: Job has no timestamps — skipping CloudWatch queries")
 
     # --- 5. Build report ---
+    job_info_clean = {k: v for k, v in job_info.items() if not k.endswith('_ms')}
     report = {
         'reported_at': datetime.now(timezone.utc).isoformat(),
-        'job': job_info,
+        'job': job_info_clean,
         'audit': {
             'total': len(manifest_lines),
             'found': found,
@@ -278,6 +309,8 @@ def main() -> None:
         if len(missing) > 1000:
             report['missing_entries_truncated'] = True
             report['total_missing'] = len(missing)
+        if missing_reasons:
+            report['missing_reasons'] = missing_reasons
 
     # --- 6. Save report to S3 ---
     report_key = f"{args.output_prefix}/_run_report.json"
