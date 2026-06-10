@@ -58,8 +58,7 @@ def main() -> None:
     parser.add_argument('--input-prefix', type=str, default='', help='S3 prefix for input files (for extension probing)')
     parser.add_argument('--output-prefix', type=str, required=True, help='S3 prefix for output files')
     parser.add_argument('--mode', type=InferenceMode, default=InferenceMode.MASKED,
-                        choices=[m.value for m in InferenceMode],
-                        help='Inference mode (determines expected output filenames)')
+                        help='Inference mode: masked (default), raw, or both')
     parser.add_argument('--write-missing', type=str, help='Write missing manifest lines to this file')
     parser.add_argument('--workers', type=int, default=DEFAULT_WORKERS,
                         help=f'Parallel S3 check workers (default: {DEFAULT_WORKERS})')

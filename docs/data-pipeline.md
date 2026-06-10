@@ -1,6 +1,6 @@
 # Data Pipeline Walkthrough
 
-This document traces a single bridge from OSM geometry to a classified output file, showing exact data shapes and transformations at each stage.
+This document traces a single bridge from OSM geometry to a classified output file, showing exact data shapes and transformations at each stage. All directory paths shown below are configurable defaults — pass `--source-dir`, `--silver-dir`, etc. to override. See [Module Reference](module-reference.md) for all CLI arguments.
 
 ---
 
@@ -227,7 +227,7 @@ Raw LAZ (unprocessed)
 | Step 2 output | `.json` | — | — | Offsets + class distribution |
 | Step 3 output | Symlinks | — | — | Organized into train/val/test dirs |
 | Step 3a output | `class_weights.json` | [4] | float | Inverse-frequency weights |
-| Step 4 – voxel coords | `discrete_coords` | (M, 3) | int32 | 5 cm grid indices |
+| Step 4 – voxel coords | `discrete_coords` | (M, 3) | int32 | 10 cm grid indices (0.1 m default) |
 | Step 4 – voxel features | `aggregated_features` | (M, 1) | float32 | Mean intensity per voxel |
 | Step 4 – batch coords | `coordinates` | (ΣM, 4) | int32 | [batch_id, x, y, z] |
 | Step 4 – model output | logits | (ΣM, 4) | float32 | Per-voxel class scores |
