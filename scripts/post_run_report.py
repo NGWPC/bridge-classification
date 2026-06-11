@@ -35,7 +35,7 @@ import boto3
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from src.constants import InferenceMode
-from src.s3_audit import audit_s3_outputs
+from src.s3_audit import DEFAULT_AUDIT_WORKERS, audit_s3_outputs
 from src.s3_client import (
     create_s3_client, download_json, stream_manifest_lines,
     upload_json, upload_text,
@@ -51,8 +51,6 @@ SUMMARY_PATTERN = re.compile(
 BRIDGE_TIME_PATTERN = re.compile(r'bridge_seconds=([\d.]+)s')
 
 LOG_GROUP = '/aws/batch/bridge-classifier'
-DEFAULT_AUDIT_WORKERS = 200  # must match src/s3_audit.py default
-
 
 
 def describe_batch_job(batch_client: Any, job_id: str) -> Dict[str, Any]:
@@ -110,14 +108,13 @@ def _query_cloudwatch(
 
 def query_cloudwatch_summaries(
     logs_client: Any, start_ms: int, end_ms: int
-) -> Tuple[Dict[str, int], List[float], List[float]]:
-    """Query CloudWatch for SUMMARY lines, return aggregated totals and per-child wall clock seconds and hours."""
+) -> Tuple[Dict[str, int], List[float]]:
+    """Query CloudWatch for SUMMARY lines, return aggregated totals and per-child wall clock seconds."""
     totals = {
         'succeeded': 0, 'failed': 0, 'skipped_exists': 0,
         'skipped_too_few_points': 0, 'download_failed': 0, 'total': 0,
     }
     child_seconds: List[float] = []
-    child_hours: List[float] = []
 
     def process(msg: str) -> None:
         match = SUMMARY_PATTERN.search(msg)
@@ -129,10 +126,9 @@ def query_cloudwatch_summaries(
             totals['download_failed'] += int(match.group(5))
             totals['total'] += int(match.group(6))
             child_seconds.append(float(match.group(7)))
-            child_hours.append(float(match.group(8)))
 
     _query_cloudwatch(logs_client, 'SUMMARY', start_ms, end_ms, process)
-    return totals, child_seconds, child_hours
+    return totals, child_seconds
 
 
 def query_cloudwatch_bridge_times(
@@ -150,8 +146,34 @@ def query_cloudwatch_bridge_times(
     return times
 
 
+def query_cloudwatch_missing_reasons(
+    logs_client: Any, start_ms: int, end_ms: int, missing: List[str],
+) -> Dict[str, str]:
+    """Query CloudWatch for failure/skip reasons on missing bridges."""
+    reasons: Dict[str, str] = {}
+    fail_pattern = re.compile(r'INFER_FAILED reason=(\S+)')
+    skip_pattern = re.compile(r'SKIP_SMALL_FILE')
+
+    for bridge_line in missing:
+        bridge_stem = bridge_line.split('/')[-1] if '/' in bridge_line else bridge_line
+        quoted_stem = f'"{bridge_stem}"'
+
+        def _make_capture(bl: str) -> Callable[[str], None]:
+            def _capture(msg: str) -> None:
+                fm = fail_pattern.search(msg)
+                if fm:
+                    reasons[bl] = fm.group(1)
+                elif skip_pattern.search(msg):
+                    reasons[bl] = 'too_few_points'
+            return _capture
+
+        _query_cloudwatch(logs_client, quoted_stem, start_ms, end_ms, _make_capture(bridge_line))
+
+    return reasons
+
+
 def compute_percentile(values: List[float], pct: float) -> float:
-    """Compute percentile from sorted values."""
+    """Compute percentile from sorted values using nearest-rank method."""
     if not values:
         return 0.0
     values_sorted = sorted(values)
@@ -204,8 +226,6 @@ def main() -> None:
     batch_client = session.client('batch', region_name=args.region)
     job_info = describe_batch_job(batch_client, job_id)
     print(f"Status: {job_info['status']}")
-    if 'wall_clock_hours' in job_info:
-        print(f"Wall clock: {job_info['wall_clock_hours']} hours")
 
     # --- 3. Audit outputs ---
     print("\nAuditing S3 outputs...")
@@ -227,29 +247,23 @@ def main() -> None:
     logs_client = session.client('logs', region_name=args.region)
 
     totals = {}
-    child_hours: List[float] = []
+    child_seconds: List[float] = []
     timing = {}
     missing_reasons: Dict[str, str] = {}
 
-    # Array parent jobs have createdAt but not startedAt — use createdAt as fallback
     start_ms = job_info.get('started_at_ms') or job_info.get('created_at_ms')
     end_ms = job_info.get('stopped_at_ms') or int(datetime.now(timezone.utc).timestamp() * 1000)
 
     if start_ms:
         print("\nQuerying CloudWatch for SUMMARY lines...")
-        totals, child_seconds, child_hours = query_cloudwatch_summaries(logs_client, start_ms, end_ms)
-        summary_count = len(child_hours)
+        totals, child_seconds = query_cloudwatch_summaries(logs_client, start_ms, end_ms)
+        summary_count = len(child_seconds)
         print(f"Found {summary_count} child summaries (expected {expected_array_size})")
         if summary_count < expected_array_size:
             print(f"WARNING: {expected_array_size - summary_count} children did not log SUMMARY (possible SPOT interruption)")
 
-        print(f"Aggregated: succeeded={totals['succeeded']}, failed={totals['failed']}, "
-              f"skipped_exists={totals['skipped_exists']}, "
-              f"skipped_too_few_points={totals['skipped_too_few_points']}, "
-              f"download_failed={totals['download_failed']}")
-
         if not args.skip_timing:
-            print("\nQuerying CloudWatch for per-bridge timing (this may take ~30s)...")
+            print("\nQuerying CloudWatch for per-bridge timing (this may take some time)...")
             bridge_times = query_cloudwatch_bridge_times(logs_client, start_ms, end_ms)
             if bridge_times:
                 timing = {
@@ -260,27 +274,14 @@ def main() -> None:
                     'min_seconds': round(min(bridge_times), 1),
                     'max_seconds': round(max(bridge_times), 1),
                 }
-                print(f"Per-bridge: avg={timing['avg_seconds']}s, "
-                      f"p50={timing['p50_seconds']}s, p95={timing['p95_seconds']}s")
         else:
             print("\nSkipping per-bridge timing (--skip-timing)")
 
-        # Query failure reasons for missing bridges
         if missing:
             print(f"\nQuerying CloudWatch for failure reasons on {len(missing)} missing bridges...")
-            fail_pattern = re.compile(r'INFER_FAILED reason=(\S+)')
-            skip_pattern = re.compile(r'SKIP_SMALL_FILE')
-            for bridge_line in missing[:100]:
-                bridge_stem = bridge_line.split('/')[-1] if '/' in bridge_line else bridge_line
-                def _capture_reason(msg: str) -> None:
-                    fm = fail_pattern.search(msg)
-                    if fm:
-                        missing_reasons[bridge_line] = fm.group(1)
-                    elif skip_pattern.search(msg):
-                        missing_reasons[bridge_line] = 'too_few_points'
-                _query_cloudwatch(logs_client, bridge_stem, start_ms, end_ms, _capture_reason)
+            missing_reasons = query_cloudwatch_missing_reasons(logs_client, start_ms, end_ms, missing)
             if missing_reasons:
-                print(f"Found reasons for {len(missing_reasons)} bridges:")
+                print(f"Found reasons for {len(missing_reasons)} of {len(missing)} bridges:")
                 for bridge, reason in list(missing_reasons.items())[:10]:
                     print(f"  {bridge}: {reason}")
     else:
@@ -288,26 +289,8 @@ def main() -> None:
 
     # --- 5. Build report ---
     job_info_clean = {k: v for k, v in job_info.items() if not k.endswith('_ms')}
-
-    child_timing_section = {
-        'children_reported': len(child_hours),
-        'children_expected': expected_array_size,
-        'min_seconds': round(min(child_seconds), 1) if child_seconds else None,
-        'max_seconds': round(max(child_seconds), 1) if child_seconds else None,
-        'avg_seconds': round(sum(child_seconds) / len(child_seconds), 1) if child_seconds else None,
-        'total_child_hours': round(sum(child_hours), 4) if child_hours else None,
-    }
-
+    total_child_hours = round(sum(s / 3600 for s in child_seconds), 4) if child_seconds else None
     spot_rate = run_config.get('spot_rate_usd', 0)
-    cost_estimate = None
-    if child_hours and spot_rate:
-        total_hours = sum(child_hours)
-        cost_estimate = {
-            'total_child_hours': round(total_hours, 4),
-            'spot_rate_usd': spot_rate,
-            'estimated_compute_usd': round(total_hours * spot_rate, 2),
-            'note': 'Based on sum of child wall-clock hours x spot rate; actual billing may differ',
-        }
 
     report = {
         'reported_at': datetime.now(timezone.utc).isoformat(),
@@ -318,9 +301,21 @@ def main() -> None:
             'missing': len(missing),
         },
         'aggregated_results': totals,
-        'child_timing': child_timing_section,
+        'child_timing': {
+            'children_reported': len(child_seconds),
+            'children_expected': expected_array_size,
+            'min_seconds': round(min(child_seconds), 1) if child_seconds else None,
+            'max_seconds': round(max(child_seconds), 1) if child_seconds else None,
+            'avg_seconds': round(sum(child_seconds) / len(child_seconds), 1) if child_seconds else None,
+            'total_child_hours': total_child_hours,
+        },
         'bridge_timing': timing,
-        'cost_estimate': cost_estimate,
+        'cost_estimate': {
+            'total_child_hours': total_child_hours,
+            'spot_rate_usd': spot_rate,
+            'estimated_compute_usd': round(total_child_hours * spot_rate, 2),
+            'note': 'Based on sum of child wall-clock hours x spot rate; actual billing may differ',
+        } if total_child_hours and spot_rate else None,
         'run_config': run_config,
     }
 
@@ -330,7 +325,8 @@ def main() -> None:
             report['missing_entries_truncated'] = True
             report['total_missing'] = len(missing)
         if missing_reasons:
-            report['missing_reasons'] = missing_reasons
+            capped_reasons = {k: v for k, v in missing_reasons.items() if k in set(missing[:1000])}
+            report['missing_reasons'] = capped_reasons
 
     # --- 6. Save report to S3 ---
     report_key = f"{args.output_prefix}/_run_report.json"
@@ -359,9 +355,10 @@ def main() -> None:
               f"{totals['skipped_too_few_points']} skipped")
     if timing:
         print(f"Timing:     avg={timing['avg_seconds']}s, p50={timing['p50_seconds']}s, p95={timing['p95_seconds']}s")
-    if cost_estimate:
-        print(f"Cost est:   ${cost_estimate['estimated_compute_usd']:.2f} "
-              f"({cost_estimate['total_child_hours']:.4f} hrs x ${spot_rate}/hr)")
+    if report.get('cost_estimate'):
+        ce = report['cost_estimate']
+        print(f"Cost est:   ${ce['estimated_compute_usd']:.2f} "
+              f"({ce['total_child_hours']:.4f} hrs x ${spot_rate}/hr)")
     print(f"Report:     s3://{args.bucket}/{report_key}")
     print(f"{'='*60}")
 
