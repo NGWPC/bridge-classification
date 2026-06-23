@@ -12,10 +12,20 @@ variable "project_name" {
   description = "Project name, used as a prefix for resource names"
   type        = string
   default     = "bridge-classifier"
+
+  validation {
+    condition     = can(regex("^[a-z0-9][a-z0-9-]*[a-z0-9]$", var.project_name))
+    error_message = "project_name must be lowercase letters, digits, and hyphens only."
+  }
 }
 
 variable "region" {
   description = "AWS region for all resources"
   type        = string
   default     = "us-east-1"
+
+  validation {
+    condition     = can(regex("^[a-z]{2}-[a-z]+-[0-9]$", var.region))
+    error_message = "region must look like an AWS region, e.g. us-east-1."
+  }
 }

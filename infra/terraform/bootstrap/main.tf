@@ -4,6 +4,7 @@ locals {
   bucket_name = "${var.project_name}-terraform-state-${data.aws_caller_identity.current.account_id}"
 }
 
+# ----- State bucket -----
 resource "aws_s3_bucket" "state" {
   bucket = local.bucket_name
 
@@ -12,6 +13,7 @@ resource "aws_s3_bucket" "state" {
   }
 }
 
+# ----- Versioning (recover prior state versions) -----
 resource "aws_s3_bucket_versioning" "state" {
   bucket = aws_s3_bucket.state.id
 
@@ -20,6 +22,7 @@ resource "aws_s3_bucket_versioning" "state" {
   }
 }
 
+# ----- Encryption at rest -----
 resource "aws_s3_bucket_server_side_encryption_configuration" "state" {
   bucket = aws_s3_bucket.state.id
 
@@ -30,6 +33,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "state" {
   }
 }
 
+# ----- Public access block -----
 resource "aws_s3_bucket_public_access_block" "state" {
   bucket = aws_s3_bucket.state.id
 
@@ -39,6 +43,7 @@ resource "aws_s3_bucket_public_access_block" "state" {
   restrict_public_buckets = true
 }
 
+# ----- Bucket policy (account-scoped, TLS-only) -----
 resource "aws_s3_bucket_policy" "state" {
   bucket = aws_s3_bucket.state.id
 

@@ -35,6 +35,7 @@ bootstrap ──(state bucket)──▶ foundation ──(subnet IDs, role ARNs)
 ## Apply
 
 Run layers in order; each layer's `terraform output` provides values for the next layer's tfvars.
+Always run `terraform plan` and review the diff before `terraform apply`.
 
 ### 1. bootstrap (once per account)
 
@@ -47,7 +48,9 @@ cp backend.hcl.example backend.hcl              # set bucket + account id
 cp terraform.tfvars.example terraform.tfvars    # set account id
 
 # comment out `backend "s3" {}` in terraform.tf
-terraform init && terraform apply               # creates the bucket with local state
+terraform init
+terraform plan                                  # review the diff before applying
+terraform apply                                 # creates the bucket with local state
 
 # uncomment `backend "s3" {}`
 terraform init -backend-config=backend.hcl -migrate-state
@@ -58,9 +61,26 @@ terraform output                                # bucket_name → foundation/app
 
 ### 2. foundation
 
-_Added next._ Creates IAM + networking; outputs subnet IDs / role ARNs for `app`. Networking is
-controlled by `create_networking` (true = create a VPC; false = pass `existing_subnet_ids` /
-`existing_security_group_id`).
+Creates IAM (Batch job / instance / spot-fleet roles + Batch service-linked role) and, by
+default, networking (VPC + public subnets + SG). Outputs the subnet IDs / SG / role ARNs that
+`app` consumes.
+
+```bash
+cd infra/terraform/foundation
+cp backend.hcl.example backend.hcl            # bucket = the bootstrap state bucket
+cp terraform.tfvars.example terraform.tfvars  # set account id + data_bucket
+terraform init -backend-config=backend.hcl
+terraform plan                                # review the diff before applying
+terraform apply
+terraform output                              # feed these values into app/terraform.tfvars
+```
+
+**Networking toggle.**
+- `create_networking` (default `true`) creates the full VPC — one public subnet per `public_subnet_cidrs` entry, IGW, routing, an S3 gateway endpoint, and the Batch SG.
+- Set it `false` to create **none** of that and instead reference an existing VPC via `existing_subnet_ids` + `existing_security_group_id`.
+- Either way foundation's `subnet_ids` / `batch_security_group_id` outputs resolve to the right values, so `app` is unaffected.
+
+`data_bucket` scopes the Batch job role to the bucket holding the model / input / predictions.
 
 ### 3. app
 
