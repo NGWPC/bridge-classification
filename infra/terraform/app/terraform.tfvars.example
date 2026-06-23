@@ -1,0 +1,32 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is git-ignored.
+allowed_account_id = "<ACCOUNT_ID>" # REQUIRED — 12-digit account
+
+# --- From the foundation layer's `terraform output` ---
+subnets                    = ["subnet-...", "subnet-..."]
+batch_security_group_id    = "sg-..."
+batch_job_role_arn         = "arn:aws:iam::<ACCOUNT_ID>:role/bridge-classifier-batch-job"
+batch_instance_profile_arn = "arn:aws:iam::<ACCOUNT_ID>:instance-profile/bridge-classifier-batch-instance"
+spot_fleet_role_arn        = "arn:aws:iam::<ACCOUNT_ID>:role/bridge-classifier-spot-fleet"
+batch_service_role_arn     = "arn:aws:iam::<ACCOUNT_ID>:role/aws-service-role/batch.amazonaws.com/AWSServiceRoleForBatch"
+
+# --- Inference data (S3) ---
+s3_bucket        = "<DATA_BUCKET>"
+s3_input_prefix  = "bridge-classification/runs/<run>/source"
+s3_manifest_uri  = "s3://<DATA_BUCKET>/bridge-classification/runs/<run>/manifest.txt"
+s3_model_uri     = "s3://<DATA_BUCKET>/bridge-classification/models/<model>.ckpt"
+s3_output_prefix = "bridge-classification/runs/<run>/predictions"
+
+# --- Optional overrides (defaults shown) ---
+# project_name        = "bridge-classifier"
+# region              = "us-east-1"
+# max_vcpus           = 256
+# instance_types      = ["g4dn.xlarge"]
+# use_spot            = true
+# image_tag           = "latest"
+# inference_mode      = "masked"
+# bridge_timeout      = 150
+# job_vcpus           = 3
+# job_memory          = 15000
+# shared_memory_size  = 4096
+# job_timeout_seconds = 28800
+# retry_attempts      = 3

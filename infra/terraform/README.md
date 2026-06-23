@@ -84,8 +84,20 @@ terraform output                              # feed these values into app/terra
 
 ### 3. app
 
-_Added next._ The workload; consumes foundation's outputs and re-exposes `ecr_repository_url`,
-`job_queue_name`, `job_definition_name`, etc. used by `scripts/`.
+The workload: ECR repo, CloudWatch log group, Batch compute environment / queue / job
+definition. Consumes foundation's outputs (subnets, SG, role ARNs) via its tfvars, plus the S3
+data config. Re-exposes `ecr_repository_url`, `job_queue_name`, `job_definition_name`, `aws_region`,
+etc. that `scripts/build_and_push.sh` and `scripts/submit_batch_job.py` read via `terraform output`.
+
+```bash
+cd infra/terraform/app
+cp backend.hcl.example backend.hcl            # bucket = the bootstrap state bucket
+cp terraform.tfvars.example terraform.tfvars  # paste foundation outputs + set the S3 data vars
+terraform init -backend-config=backend.hcl
+terraform plan                                # review the diff before applying
+terraform apply
+terraform output
+```
 
 ## Per-account config
 
