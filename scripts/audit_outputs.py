@@ -6,6 +6,8 @@ Optionally writes missing entries to a new manifest for re-submission.
 
 Uses a thread pool for parallel S3 head_object checks.
 
+--profile: S3 data access. Falls back to AWS_PROFILE if not set.
+
 Usage:
     # Check all outputs exist
     python scripts/audit_outputs.py \
@@ -25,8 +27,8 @@ Usage:
     # Tune concurrency (default: 200)
     python scripts/audit_outputs.py ... --workers 100
 
-    # Use a specific AWS profile
-    python scripts/audit_outputs.py ... --profile Data
+    # Use a specific AWS profile for S3 access
+    python scripts/audit_outputs.py ... --profile my-profile
 
     # Save audit results to S3
     python scripts/audit_outputs.py \

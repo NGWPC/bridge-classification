@@ -6,22 +6,25 @@ Reads _run_config.json (saved at submission), audits S3 outputs, queries
 CloudWatch logs for per-child summaries and per-bridge timing, and saves
 _run_report.json to the output prefix.
 
+--profile:       S3 data access. Falls back to AWS_PROFILE if not set.
+--batch-profile: Batch/CloudWatch access. Only needed when Batch infra
+                 is in a different account than the S3 data bucket.
+
 Usage:
     python scripts/post_run_report.py \
-        --bucket fimc-data \
-        --output-prefix bridge-classification/runs/noaa-bridges-without-tif/predictions \
+        --bucket my-bucket \
+        --output-prefix bridge-classification/runs/my-run/predictions \
         --mode masked \
-        --profile Data \
-        --batch-profile test-se
+        --profile my-profile
 
-    # With explicit input prefix (for S3 extension probing during audit):
+    # Cross-account: S3 data and Batch/CloudWatch on different profiles
     python scripts/post_run_report.py \
-        --bucket fimc-data \
-        --output-prefix bridge-classification/runs/.../predictions \
-        --input-prefix bridge-classification/runs/.../source \
+        --bucket my-bucket \
+        --output-prefix bridge-classification/runs/my-run/predictions \
+        --input-prefix bridge-classification/ml-data/source \
         --mode masked \
-        --profile Data \
-        --batch-profile test-se
+        --profile data-profile \
+        --batch-profile infra-profile
 """
 
 import argparse

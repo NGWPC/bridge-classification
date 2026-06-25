@@ -6,19 +6,20 @@ set -o pipefail
 # Bridge Classification — Build Docker image and push to ECR
 #
 # Usage:
+#   export AWS_PROFILE=my-profile
 #   ./scripts/build_and_push.sh
 #
-# Reads config from Terraform outputs first, then falls back to environment
-# variables. Exits early if required values are missing — no hardcoded defaults.
+# AWS_PROFILE: the account where ECR lives (same account as Batch infra).
+# Reads ecr_repository_url and aws_region from Terraform outputs, then
+# falls back to environment variables. Exits early if required values
+# are missing — no hardcoded defaults.
 # ---------------------------------------------------------------------------
 
 # Read from terraform outputs first, then env vars
-if [ -d "terraform" ] && command -v terraform &>/dev/null; then
-  _tf_region=$(cd terraform && terraform output -raw aws_region 2>/dev/null) || true
-  _tf_profile=$(cd terraform && terraform output -raw aws_profile 2>/dev/null) || true
-  _tf_ecr=$(cd terraform && terraform output -raw ecr_repository_url 2>/dev/null) || true
+if [ -d "infra/terraform/app" ] && command -v terraform &>/dev/null; then
+  _tf_region=$(cd infra/terraform/app && terraform output -raw aws_region 2>/dev/null) || true
+  _tf_ecr=$(cd infra/terraform/app && terraform output -raw ecr_repository_url 2>/dev/null) || true
   [ -n "$_tf_region" ]  && AWS_REGION="$_tf_region"
-  [ -n "$_tf_profile" ] && AWS_PROFILE="$_tf_profile"
   [ -n "$_tf_ecr" ]     && ECR_REPO="${ECR_REPO:-$_tf_ecr}"
 fi
 
@@ -28,7 +29,7 @@ missing=""
 [ -z "$ECR_REPO" ]    && missing="${missing}ECR_REPO "
 if [ -n "$missing" ]; then
   echo "ERROR: Missing: $missing" >&2
-  echo "Run 'cd terraform && terraform init && terraform apply' or set env vars." >&2
+  echo "Run 'cd infra/terraform/app && terraform init && terraform apply' or set env vars." >&2
   exit 1
 fi
 

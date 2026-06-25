@@ -9,9 +9,11 @@ Each array child downloads the manifest and model, computes its chunk, then proc
 
 | File                                 | Purpose                                                            |
 | ------------------------------------ | ------------------------------------------------------------------ |
-| `terraform/`                         | Infrastructure as code (ECR, compute env, queue, job definition)   |
-| `terraform/terraform.tfvars`         | All configurable values — gitignored; copy from `.tfvars.example`  |
-| `terraform/terraform.tfvars.example` | Template with placeholder values for new setups                    |
+| `infra/terraform/bootstrap/`         | S3 bucket for Terraform remote state (once per account)            |
+| `infra/terraform/foundation/`        | IAM roles + networking (VPC or reference existing)                 |
+| `infra/terraform/app/`               | Workload: ECR, compute env, queue, job definition                  |
+| `infra/terraform/app/terraform.tfvars` | All configurable values — gitignored; copy from `.tfvars.example`|
+| `infra/terraform/app/terraform.tfvars.example` | Template with placeholder values for new setups          |
 | `scripts/build_and_push.sh`          | Build Docker image and push to ECR                                 |
 | `scripts/submit_batch_job.py`        | Submit single or array batch jobs                                  |
 | `scripts/batch_entrypoint.py`        | Container entrypoint — per-bridge processing loop                  |
@@ -66,9 +68,50 @@ Each child processes bridges **one at a time** in a loop:
 
 - AWS account with IAM permissions for Batch, ECR, S3
 - [Terraform](https://developer.hashicorp.com/terraform/install) installed
-- Docker installed (for building images)
+- Docker installed (for building inference images)
+- Python environment for management scripts (job submission, audit, reporting):
+  - **Option A**: `conda env create -f environment-data.yaml && conda activate bridge-classify-data` (Linux only — contains platform-specific packages)
+  - **Option B**: `pip install boto3` (minimal, cross-platform — sufficient for submit/audit/report)
 - Trained model checkpoint uploaded to S3
 - A manifest file listing bridges to process (one per line)
+
+**Which environment for what:**
+
+| Task | Environment |
+|------|------------|
+| Training / inference (GPU) | Docker (recommended) or `environment.yaml` |
+| Data processing (CPU) | `environment-data.yaml` |
+| Job submission, audit, reporting | `environment-data.yaml` or `pip install boto3` |
+| Tests | `pip install -r requirements-test.txt` |
+
+---
+
+## AWS Profile Configuration
+
+All scripts use `AWS_PROFILE` as the primary credential source. Set it to the account where infrastructure was deployed (Batch, ECR, CloudWatch):
+
+```bash
+export AWS_PROFILE=my-profile
+```
+
+**Single account** (infra and data in the same account) — this is all you need. Every script falls back to `AWS_PROFILE` for all AWS access.
+
+**Cross-account** (S3 data in a different account than Batch infra) — pass `--profile` to specify the S3 data profile. `AWS_PROFILE` still controls Batch/ECR/CloudWatch access:
+
+```bash
+# Submit: Batch uses AWS_PROFILE, manifest is read via --profile
+python scripts/submit_batch_job.py --manifest s3://... --profile data-account
+
+# Report: S3 audit via --profile, CloudWatch via --batch-profile
+python scripts/post_run_report.py --bucket ... --profile data-account --batch-profile infra-account
+```
+
+| Script | `AWS_PROFILE` | `--profile` | `--batch-profile` |
+|--------|---------------|-------------|-------------------|
+| `build_and_push.sh` | ECR login + push | — | — |
+| `submit_batch_job.py` | Batch job submission | S3 manifest access (optional) | — |
+| `audit_outputs.py` | — | S3 output checks | — |
+| `post_run_report.py` | — | S3 audit | Batch/CloudWatch queries (optional) |
 
 ---
 
@@ -76,44 +119,59 @@ Each child processes bridges **one at a time** in a loop:
 
 ### 1. Configure
 
-Copy the example and fill in your values (`terraform.tfvars` is gitignored):
+Infrastructure is layered: `bootstrap` (state bucket) → `foundation` (IAM + networking) → `app` (workload). Bootstrap and foundation are applied once per account; day-to-day changes only touch `app`. See `infra/terraform/README.md` for the full layered apply guide.
+
+Copy the app example and fill in your values (`terraform.tfvars` is gitignored):
 
 ```bash
-cp terraform/terraform.tfvars.example terraform/terraform.tfvars
+cd infra/terraform/app
+cp terraform.tfvars.example terraform.tfvars
 ```
 
-Edit `terraform/terraform.tfvars` with your S3 paths, model, and AWS settings. Examples below use `fimc-data` as the bucket — replace with your own:
+Edit `terraform.tfvars` with foundation outputs (subnets, SG, role ARNs) and your S3 paths. Examples below use `my-bucket` as the bucket — replace with your own:
 
 ```hcl
-# terraform/terraform.tfvars
+# infra/terraform/app/terraform.tfvars
 
-# S3 / Inference config — change these for new runs
-s3_bucket        = "fimc-data"
+allowed_account_id = "123456789012"
+
+# --- From foundation's `terraform output` ---
+subnets                    = ["subnet-...", "subnet-..."]
+batch_security_group_id    = "sg-..."
+batch_job_role_arn         = "arn:aws:iam::123456789012:role/bridge-classifier-batch-job"
+batch_instance_profile_arn = "arn:aws:iam::123456789012:instance-profile/bridge-classifier-batch-instance"
+spot_fleet_role_arn        = "arn:aws:iam::123456789012:role/bridge-classifier-spot-fleet"
+batch_service_role_arn     = "arn:aws:iam::123456789012:role/aws-service-role/batch.amazonaws.com/AWSServiceRoleForBatch"
+
+# --- S3 / Inference config — change these for new runs ---
+s3_bucket        = "my-bucket"
 s3_input_prefix  = "bridge-classification/ml-data/source"
-s3_manifest_uri  = "s3://fimc-data/bridge-classification/ml-data/split_test_ids.txt"
-s3_model_uri     = "s3://fimc-data/path/to/your-model.ckpt"
+s3_manifest_uri  = "s3://my-bucket/bridge-classification/ml-data/split_test_ids.txt"
+s3_model_uri     = "s3://my-bucket/path/to/your-model.ckpt"
 s3_output_prefix = "scratch/your-name/predictions"
 
 # Compute (optional tweaks)
-use_spot       = true             # ~60-70% cost savings (auto-retries on interruption)
-instance_types = ["g4dn.xlarge"]
-max_vcpus      = 256
+# use_spot       = true             # ~60-70% cost savings (auto-retries on interruption)
+# instance_types = ["g4dn.xlarge"]
+# max_vcpus      = 256
 
 # Inference runtime (defaults shown — override at submit time via --env if needed)
-inference_mode = "masked"         # "masked", "raw", or "both"
-bridge_timeout = 150              # per-bridge timeout in seconds
-retry_attempts = 3                # SPOT interruption retries
+# inference_mode = "masked"         # "masked", "raw", or "both"
+# bridge_timeout = 150              # per-bridge timeout in seconds
+# retry_attempts = 3                # SPOT interruption retries
 ```
 
 See [Configuration Reference](#configuration-reference) for all available options.
 
 ### 2. Deploy Infrastructure
 
+First-time setup requires all three layers (see `infra/terraform/README.md`). For day-to-day config changes (S3 paths, instance types, etc.), only the app layer needs re-applying:
+
 ```bash
-cd terraform
-terraform init      # first time only
-terraform plan      # preview changes
-terraform apply     # create/update resources
+cd infra/terraform/app
+terraform init -backend-config=backend.hcl   # first time only
+terraform plan                                # preview changes
+terraform apply                               # create/update resources
 ```
 
 This creates: ECR repository, Batch compute environment, job queue, and job definition (with your S3 config baked into the job definition env vars).
@@ -121,31 +179,32 @@ This creates: ECR repository, Batch compute environment, job queue, and job defi
 ### 3. Build and Push Docker Image
 
 ```bash
-cd ..
+export AWS_PROFILE=my-profile
+export AWS_REGION=us-east-1
 chmod +x ./scripts/build_and_push.sh
 ./scripts/build_and_push.sh
 ```
 
-Only needed when you change code (`src/`, `scripts/`, or `Dockerfile`). Changing S3 paths or inference config in `terraform.tfvars` does **not** require a rebuild — those are environment variables in the job definition.
+Only needed when you change code (`src/`, `scripts/`, or `Dockerfile`). Changing S3 paths or inference config in `infra/terraform/app/terraform.tfvars` does **not** require a rebuild — those are environment variables in the job definition.
 
 ### 4. Submit a Job
 
 ```bash
 # Dry run — shows array size, cost estimate, container overrides (does NOT submit)
 python scripts/submit_batch_job.py \
-    --manifest s3://fimc-data/bridge-classification/ml-data/split_test_ids.txt \
-    --profile Data \
+    --manifest s3://my-bucket/bridge-classification/ml-data/split_test_ids.txt \
+    --profile my-profile \
     --dry-run
 
 # Submit array job from S3 manifest
 python scripts/submit_batch_job.py \
-    --manifest s3://fimc-data/bridge-classification/ml-data/split_test_ids.txt \
-    --profile Data
+    --manifest s3://my-bucket/bridge-classification/ml-data/split_test_ids.txt \
+    --profile my-profile
 
 # Override inference mode and output prefix for one run
 python scripts/submit_batch_job.py \
-    --manifest s3://fimc-data/bridge-classification/ml-data/split_test_ids.txt \
-    --profile Data \
+    --manifest s3://my-bucket/bridge-classification/ml-data/split_test_ids.txt \
+    --profile my-profile \
     --env INFERENCE_MODE=both \
     --env S3_OUTPUT_PREFIX=scratch/myfolder/bridge-classification-test/predictions
 
@@ -154,22 +213,14 @@ python scripts/submit_batch_job.py --single
 
 # Validate manifest format before submitting
 python scripts/submit_batch_job.py \
-    --manifest s3://fimc-data/bridge-classification/ml-data/split_test_ids.txt \
-    --profile Data \
+    --manifest s3://my-bucket/bridge-classification/ml-data/split_test_ids.txt \
+    --profile my-profile \
     --validate
 ```
 
 The `--profile` flag controls which AWS profile is used to read the manifest from S3 (for line counting).
 
-Pass `--bucket` and `--output-prefix` to save `_run_config.json` to S3. Optional, but required if you plan to run `post_run_report.py` afterward:
-
-```bash
-python scripts/submit_batch_job.py \
-    --manifest s3://fimc-data/.../manifest.txt \
-    --bucket fimc-data \
-    --output-prefix bridge-classification/runs/my-run/predictions \
-    --profile Data
-```
+Run tracking (`_run_config.json`) is saved automatically — `s3_bucket` and `s3_output_prefix` are read from terraform outputs. Override with `--bucket` and `--output-prefix` if needed, or via `--env S3_OUTPUT_PREFIX=...` for a different output path.
 
 ### 5. Monitor
 
@@ -235,10 +286,10 @@ fields @timestamp, @message
 
 ```bash
 # Tail logs in terminal
-aws logs tail /aws/batch/bridge-classifier --follow --profile test-se
+aws logs tail /aws/batch/bridge-classifier --follow --profile my-profile
 
 # List running jobs
-aws batch list-jobs --job-queue bridge-classifier-inference-queue --job-status RUNNING --profile test-se
+aws batch list-jobs --job-queue bridge-classifier-inference-queue --job-status RUNNING --profile my-profile
 ```
 
 ### 6. Audit Outputs
@@ -248,22 +299,22 @@ After all children complete, verify that every expected output exists in S3:
 ```bash
 # Check all outputs exist
 python scripts/audit_outputs.py \
-    --manifest s3://fimc-data/bridge-classification/ml-data/split_test_ids.txt \
-    --bucket fimc-data \
+    --manifest s3://my-bucket/bridge-classification/ml-data/split_test_ids.txt \
+    --bucket my-bucket \
     --input-prefix bridge-classification/ml-data/source \
     --output-prefix scratch/myfolder/bridge-classification-test/predictions \
     --mode masked \
-    --profile Data
+    --profile my-profile
 
 # Write missing entries to a file for re-submission
 python scripts/audit_outputs.py \
-    --manifest s3://fimc-data/bridge-classification/ml-data/split_test_ids.txt \
-    --bucket fimc-data \
+    --manifest s3://my-bucket/bridge-classification/ml-data/split_test_ids.txt \
+    --bucket my-bucket \
     --input-prefix bridge-classification/ml-data/source \
     --output-prefix scratch/myfolder/bridge-classification-test/predictions \
     --mode masked \
     --write-missing missing.txt \
-    --profile Data
+    --profile my-profile
 
 # Tune concurrency (default: 200 threads)
 python scripts/audit_outputs.py ... --workers 100
@@ -272,10 +323,10 @@ python scripts/audit_outputs.py ... --workers 100
 If outputs are missing, upload the missing manifest and re-submit:
 
 ```bash
-aws s3 cp missing.txt s3://fimc-data/bridge-classification/missing_manifest.txt --profile Data
+aws s3 cp missing.txt s3://my-bucket/bridge-classification/missing_manifest.txt --profile my-profile
 python scripts/submit_batch_job.py \
-    --manifest s3://fimc-data/bridge-classification/missing_manifest.txt \
-    --profile Data
+    --manifest s3://my-bucket/bridge-classification/missing_manifest.txt \
+    --profile my-profile
 ```
 
 Re-submission is safe — skip-if-exists means already-completed bridges are skipped.
@@ -286,11 +337,11 @@ After all children complete, generate a comprehensive report with audit results,
 
 ```bash
 python scripts/post_run_report.py \
-    --bucket fimc-data \
+    --bucket my-bucket \
     --output-prefix bridge-classification/runs/my-run/predictions \
     --mode masked \
-    --profile Data \
-    --batch-profile test-se
+    --profile my-profile \
+    --batch-profile my-profile
 ```
 
 Use `--batch-profile` when your S3 and Batch/CloudWatch credentials are on different AWS profiles.
@@ -301,14 +352,15 @@ Use `--skip-timing` for a faster report without per-bridge p50/p95 stats.
 
 ### 8. Cleanup
 
-To tear down all Batch infrastructure:
+To tear down all Batch infrastructure, destroy layers in reverse order:
 
 ```bash
-cd terraform
-terraform destroy
+cd infra/terraform/app && terraform destroy        # workload (ECR, Batch)
+cd ../foundation && terraform destroy              # IAM roles + networking
+cd ../bootstrap && terraform destroy               # state bucket (optional — safe to keep)
 ```
 
-This removes the ECR repository, compute environment, job queue, and job definition. It does **not** delete S3 data or IAM roles.
+Destroying `app` alone is usually sufficient (removes ECR, compute env, queue, job def). Foundation and bootstrap are shared infrastructure rarely torn down. S3 data is not affected.
 
 ---
 
@@ -405,27 +457,28 @@ The split manifest produced by `utils/split_data.py` (`split_test_ids.txt`) is d
 
 ## Configuration Reference
 
-All variables are defined in `terraform/variables.tf` with defaults. Override them in `terraform/terraform.tfvars`.
+All variables are defined in `infra/terraform/app/variables.tf` with defaults. Override them in `infra/terraform/app/terraform.tfvars`. Set `AWS_PROFILE` in your environment (not in Terraform).
 
 ### AWS & General
 
 
-| Variable       | Default             | Description                          |
-| -------------- | ------------------- | ------------------------------------ |
-| `aws_region`   | `us-east-1`         | AWS region                           |
-| `aws_profile`  | `test-se`           | AWS CLI profile (used for Batch API) |
-| `project_name` | `bridge-classifier` | Prefix for all resource names        |
+| Variable             | Default             | Description                                |
+| -------------------- | ------------------- | ------------------------------------------ |
+| `allowed_account_id` | (required)          | 12-digit AWS account ID — safety guard     |
+| `region`             | `us-east-1`         | AWS region                                 |
+| `project_name`       | `bridge-classifier` | Prefix for all resource names              |
 
 
-### IAM Roles (existing — not managed by Terraform)
+### IAM Roles (managed by the foundation layer)
 
+Paste these from `cd infra/terraform/foundation && terraform output`:
 
-| Variable                 | Description                                            |
-| ------------------------ | ------------------------------------------------------ |
-| `batch_job_role_arn`     | IAM role for job containers (needs S3 read/write)      |
-| `batch_instance_profile` | EC2 instance profile for compute instances             |
-| `spot_fleet_role_arn`    | EC2 Spot Fleet role (only used when `use_spot = true`) |
-| `batch_service_role_arn` | AWS Batch service-linked role                          |
+| Variable                     | Description                                            |
+| ---------------------------- | ------------------------------------------------------ |
+| `batch_job_role_arn`         | IAM role for job containers (S3 read/write scoped to data bucket) |
+| `batch_instance_profile_arn` | EC2 instance profile for compute instances             |
+| `spot_fleet_role_arn`        | EC2 Spot Fleet role (only used when `use_spot = true`) |
+| `batch_service_role_arn`     | AWS Batch service-linked role                          |
 
 
 ### Compute
@@ -478,7 +531,7 @@ All variables are defined in `terraform/variables.tf` with defaults. Override th
 After `terraform apply`, these are available to scripts:
 
 ```bash
-terraform output
+cd infra/terraform/app && terraform output
 ```
 
 
@@ -488,8 +541,9 @@ terraform output
 | `job_definition_name`      | Batch job definition name               |
 | `job_queue_name`           | Batch job queue name                    |
 | `compute_environment_name` | Batch compute environment name          |
-| `s3_manifest_uri`          | S3 manifest URI                         |
 | `log_group_name`           | CloudWatch log group for Batch job logs |
+| `s3_manifest_uri`          | S3 manifest URI (passthrough)           |
+| `aws_region`               | AWS region (passthrough for scripts)    |
 
 
 ---
@@ -556,10 +610,10 @@ Test the full S3-based entrypoint locally before submitting to Batch:
 ```bash
 # Set env vars to simulate Batch
 export AWS_PROFILE=Data
-export S3_BUCKET=fimc-data
+export S3_BUCKET=my-bucket
 export S3_INPUT_PREFIX=bridge-classification/ml-data/source
-export S3_MANIFEST_URI=s3://fimc-data/bridge-classification/test_manifest.txt
-export S3_MODEL_URI=s3://fimc-data/bridge-classification/models/v3/epoch=35.ckpt
+export S3_MANIFEST_URI=s3://my-bucket/bridge-classification/test_manifest.txt
+export S3_MODEL_URI=s3://my-bucket/bridge-classification/models/v3/epoch=35.ckpt
 export S3_OUTPUT_PREFIX=scratch/your-name/predictions-test
 export ARRAY_SIZE=1
 export AWS_BATCH_JOB_ARRAY_INDEX=0
@@ -587,17 +641,17 @@ All Batch resources are tagged with `Project = bridge-classifier`. Tags propagat
 
 **Job stuck in RUNNABLE**: Compute environment may not have capacity. Check that `max_vcpus` is sufficient and the instance type is available in your subnets/AZs.
 
-**"Required environment variables not set" error**: The entrypoint validates that all S3 env vars are set. These come from the Terraform job definition. Run `terraform apply` to ensure the job definition has all required env vars.
+**"Required environment variables not set" error**: The entrypoint validates that all S3 env vars are set. These come from the Terraform job definition. Run `cd infra/terraform/app && terraform apply` to ensure the job definition has all required env vars.
 
 **Model loading errors**: Ensure the checkpoint was saved by `BridgeLightningModule` (Lightning format with `state_dict` key). The inference script handles both Lightning checkpoints and raw state dicts.
 
 **GPU out of memory**: Large bridges with dense point clouds can exceed GPU memory. Use a larger instance or increase `--voxel-size` (coarser voxels = fewer voxels = less memory).
 
-**S3 permission denied**: Verify the Batch job IAM role (`batch_job_role_arn`) has `s3:GetObject` on the input bucket and `s3:PutObject` on the output prefix.
+**S3 permission denied**: The Batch job IAM role is managed by the foundation layer and scoped to the `data_bucket`. Verify that `s3_bucket` in the app tfvars matches `data_bucket` in the foundation tfvars.
 
 **SPOT instance interruptions**: The job definition auto-retries up to `retry_attempts` times on SPOT interruption. Combined with skip-if-exists, retries are cheap. For critical runs with no tolerance for delay, set `use_spot = false`.
 
-**Per-bridge timeout (`INFER_FAILED reason=timeout` in logs)**: A bridge exceeded `bridge_timeout` seconds during inference. Usually caused by very large point clouds. Increase `bridge_timeout` in tfvars or via `--env BRIDGE_TIMEOUT=300` at submit time.
+**Per-bridge timeout (`INFER_FAILED reason=timeout` in logs)**: A bridge exceeded `bridge_timeout` seconds during inference. Usually caused by very large point clouds. Increase `bridge_timeout` in `infra/terraform/app/terraform.tfvars` or via `--env BRIDGE_TIMEOUT=300` at submit time.
 
 **S3 throttling (503 SlowDown)**: The S3 client uses adaptive retry (3 attempts). If you see persistent throttling, your request rate may exceed the prefix partition limit. Input files distributed across HUC prefixes naturally mitigate this.
 

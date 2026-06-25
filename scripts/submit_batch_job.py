@@ -1,6 +1,11 @@
 """
 Bridge Classification — Batch Job Submission Script
 
+AWS_PROFILE: the account where Batch infra lives. Used for job submission.
+--profile:   S3 data access override. Only needed when the manifest/data
+             bucket is in a different account than Batch. Falls back to
+             AWS_PROFILE if not set.
+
 Usage:
     # Array job from S3 manifest
     python scripts/submit_batch_job.py --manifest s3://bucket/path/manifest.txt
@@ -20,9 +25,10 @@ Usage:
     # Single job (no array)
     python scripts/submit_batch_job.py --single
 
-    # With run config tracking (saves _run_config.json to S3 for post-run reporting)
+    # Run config (_run_config.json) is saved automatically from terraform outputs.
+    # Override bucket/prefix if needed:
     python scripts/submit_batch_job.py --manifest s3://bucket/manifest.txt \
-        --bucket fimc-data --output-prefix bridge-classification/runs/my-run/predictions
+        --bucket other-bucket --output-prefix other/prefix
 """
 
 import argparse
@@ -45,10 +51,11 @@ DEFAULT_CHUNK_TARGET = 60
 SPOT_PRICE_PER_HOUR = 0.234  # g4dn.xlarge spot estimate (fluctuates) — check https://aws.amazon.com/ec2/spot/pricing/
 
 
-def get_terraform_outputs(terraform_dir: str = 'terraform') -> Dict[str, str]:
+def get_terraform_outputs(terraform_dir: str = 'infra/terraform/app') -> Dict[str, str]:
     """Read AWS config from terraform outputs."""
     outputs = {}
-    keys = ['aws_region', 'aws_profile', 'job_definition_name', 'job_queue_name', 's3_manifest_uri']
+    keys = ['aws_region', 'job_definition_name', 'job_queue_name', 's3_manifest_uri',
+            's3_bucket', 's3_output_prefix']
 
     if not os.path.isdir(terraform_dir):
         return outputs
@@ -124,14 +131,14 @@ def main() -> None:
     parser.add_argument('--job-name', type=str, default='bridge-inference',
                         help='Job name prefix (default: bridge-inference)')
     parser.add_argument('--profile', type=str, help='AWS profile override for S3 access')
-    parser.add_argument('--bucket', type=str, help='S3 bucket for saving run config (required for run tracking)')
-    parser.add_argument('--output-prefix', type=str, help='S3 output prefix for saving run config (required for run tracking)')
+    parser.add_argument('--bucket', type=str, help='S3 bucket override (default: from terraform output s3_bucket)')
+    parser.add_argument('--output-prefix', type=str, help='S3 output prefix override (default: from terraform output s3_output_prefix)')
     args = parser.parse_args()
 
     # --- Read terraform config ---
     tf = get_terraform_outputs()
     aws_region = os.environ.get('AWS_REGION') or tf.get('aws_region')
-    aws_profile = os.environ.get('AWS_PROFILE') or tf.get('aws_profile')
+    aws_profile = os.environ.get('AWS_PROFILE')
     job_def_name = os.environ.get('JOB_DEF_NAME') or tf.get('job_definition_name')
     job_queue = os.environ.get('JOB_QUEUE') or tf.get('job_queue_name')
 
@@ -142,7 +149,7 @@ def main() -> None:
     if not job_queue: missing.append('JOB_QUEUE')
     if missing:
         print(f"ERROR: Missing config: {' '.join(missing)}")
-        print("Run 'cd terraform && terraform init && terraform apply' or set env vars.")
+        print("Run 'cd infra/terraform/app && terraform init && terraform apply' or set env vars.")
         sys.exit(1)
 
     # Fall back to s3_manifest_uri from terraform outputs when --manifest not provided
@@ -202,6 +209,8 @@ def main() -> None:
     env_overrides = {}
     if manifest:
         env_overrides['S3_MANIFEST_URI'] = manifest
+    if args.output_prefix and 'S3_OUTPUT_PREFIX' not in env_overrides:
+        env_overrides['S3_OUTPUT_PREFIX'] = args.output_prefix
     for item in args.env:
         if '=' not in item:
             print(f"ERROR: --env value must be KEY=VALUE, got: {item}")
@@ -256,7 +265,14 @@ def main() -> None:
     print(f"Monitor at: https://console.aws.amazon.com/batch/home?region={aws_region}#jobs")
 
     # --- Save run config to S3 ---
-    if args.bucket and args.output_prefix:
+    run_bucket = args.bucket or tf.get('s3_bucket')
+    run_output_prefix = (
+        env_overrides.get('S3_OUTPUT_PREFIX')
+        or args.output_prefix
+        or tf.get('s3_output_prefix')
+    )
+
+    if run_bucket and run_output_prefix:
         git_commit = "unknown"
         try:
             git_commit = subprocess.check_output(
@@ -270,8 +286,8 @@ def main() -> None:
             "job_name": full_job_name,
             "submitted_at": datetime.now(timezone.utc).isoformat(),
             "manifest_uri": manifest,
-            "s3_bucket": args.bucket,
-            "s3_output_prefix": args.output_prefix,
+            "s3_bucket": run_bucket,
+            "s3_output_prefix": run_output_prefix,
             "array_size": array_size,
             "chunk_target": args.chunk_target,
             "total_bridges": total_files,
@@ -280,11 +296,12 @@ def main() -> None:
             "env_overrides": env_overrides,
         }
 
-        config_key = f"{args.output_prefix}/_run_config.json"
-        upload_json(s3, run_config, args.bucket, config_key)
-        print(f"Run config saved: s3://{args.bucket}/{config_key}")
+        config_key = f"{run_output_prefix}/_run_config.json"
+        upload_json(s3, run_config, run_bucket, config_key)
+        print(f"Run config saved: s3://{run_bucket}/{config_key}")
     else:
-        print("\nTip: pass --bucket and --output-prefix to save run config to S3 for post-run reporting")
+        print("\nWARN: Could not determine s3_bucket/s3_output_prefix — run config not saved.")
+        print("Set them in terraform.tfvars or pass --bucket and --output-prefix.")
 
 
 if __name__ == '__main__':
