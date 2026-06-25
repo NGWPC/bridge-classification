@@ -30,6 +30,18 @@ variable "region" {
   }
 }
 
+variable "team" {
+  description = "Team name for cost-allocation and ownership tagging (omitted from tags if empty)"
+  type        = string
+  default     = ""
+}
+
+variable "poc" {
+  description = "Point of contact for these resources (omitted from tags if empty)"
+  type        = string
+  default     = ""
+}
+
 variable "data_bucket" {
   description = "S3 bucket the inference workload reads (model, input) and writes (predictions). Scopes the Batch job role."
   type        = string
@@ -40,10 +52,62 @@ variable "data_bucket" {
   }
 }
 
+# --- IAM: create roles (default), or reference existing ones ---
+
+variable "create_iam" {
+  description = "Create IAM roles for Batch. Set false to reference existing roles via existing_* variables."
+  type        = bool
+  default     = true
+}
+
 variable "create_batch_service_linked_role" {
   description = "Create the AWSServiceRoleForBatch service-linked role. Set false if the account already has it."
   type        = bool
   default     = true
+}
+
+variable "existing_batch_job_role_arn" {
+  description = "Existing Batch job role ARN (required when create_iam = false)"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.create_iam || can(regex("^arn:aws:iam::[0-9]{12}:role/", var.existing_batch_job_role_arn))
+    error_message = "existing_batch_job_role_arn is required (and must be a role ARN) when create_iam = false."
+  }
+}
+
+variable "existing_batch_instance_profile_arn" {
+  description = "Existing Batch instance profile ARN (required when create_iam = false)"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.create_iam || can(regex("^arn:aws:iam::[0-9]{12}:instance-profile/", var.existing_batch_instance_profile_arn))
+    error_message = "existing_batch_instance_profile_arn is required (and must be an instance-profile ARN) when create_iam = false."
+  }
+}
+
+variable "existing_spot_fleet_role_arn" {
+  description = "Existing Spot Fleet role ARN (required when create_iam = false)"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.create_iam || can(regex("^arn:aws:iam::[0-9]{12}:role/", var.existing_spot_fleet_role_arn))
+    error_message = "existing_spot_fleet_role_arn is required (and must be a role ARN) when create_iam = false."
+  }
+}
+
+variable "existing_batch_service_role_arn" {
+  description = "Existing Batch service role ARN (required when create_iam = false)"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.create_iam || can(regex("^arn:aws:iam::[0-9]{12}:role/", var.existing_batch_service_role_arn))
+    error_message = "existing_batch_service_role_arn is required (and must be a role ARN) when create_iam = false."
+  }
 }
 
 # --- Networking: create fresh (default), or reference an existing VPC ---

@@ -35,3 +35,13 @@ output "aws_region" {
   description = "AWS region (passthrough for scripts)"
   value       = var.region
 }
+
+output "s3_bucket" {
+  description = "S3 data bucket (passthrough for run tracking)"
+  value       = var.s3_bucket
+}
+
+output "s3_output_prefix" {
+  description = "S3 output prefix (passthrough for run tracking)"
+  value       = var.s3_output_prefix
+}

@@ -15,24 +15,24 @@ output "vpc_id" {
   value       = var.create_networking ? aws_vpc.main[0].id : var.existing_vpc_id
 }
 
-# --- IAM (→ app) ---
+# --- IAM (resolves to created roles, or the existing ARNs passed in) ---
 
 output "batch_job_role_arn" {
   description = "Batch job (task) role ARN — job definition jobRoleArn"
-  value       = aws_iam_role.batch_job.arn
+  value       = var.create_iam ? aws_iam_role.batch_job[0].arn : var.existing_batch_job_role_arn
 }
 
 output "batch_instance_profile_arn" {
   description = "Batch container instance profile ARN — compute env instance_role"
-  value       = aws_iam_instance_profile.batch_instance.arn
+  value       = var.create_iam ? aws_iam_instance_profile.batch_instance[0].arn : var.existing_batch_instance_profile_arn
 }
 
 output "spot_fleet_role_arn" {
   description = "Spot Fleet role ARN — compute env spot_iam_fleet_role"
-  value       = aws_iam_role.spot_fleet.arn
+  value       = var.create_iam ? aws_iam_role.spot_fleet[0].arn : var.existing_spot_fleet_role_arn
 }
 
 output "batch_service_role_arn" {
   description = "Batch service-linked role ARN — compute env service_role"
-  value       = var.create_batch_service_linked_role ? aws_iam_service_linked_role.batch[0].arn : "arn:aws:iam::${local.account_id}:role/aws-service-role/batch.amazonaws.com/AWSServiceRoleForBatch"
+  value       = var.create_iam ? (var.create_batch_service_linked_role ? aws_iam_service_linked_role.batch[0].arn : "arn:aws:iam::${local.account_id}:role/aws-service-role/batch.amazonaws.com/AWSServiceRoleForBatch") : var.existing_batch_service_role_arn
 }

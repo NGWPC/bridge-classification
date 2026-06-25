@@ -29,3 +29,15 @@ variable "region" {
     error_message = "region must look like an AWS region, e.g. us-east-1."
   }
 }
+
+variable "team" {
+  description = "Team name for cost-allocation and ownership tagging (omitted from tags if empty)"
+  type        = string
+  default     = ""
+}
+
+variable "poc" {
+  description = "Point of contact for these resources (omitted from tags if empty)"
+  type        = string
+  default     = ""
+}

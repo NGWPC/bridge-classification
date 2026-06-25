@@ -20,11 +20,11 @@ resource "aws_batch_compute_environment" "gpu" {
 
     # Batch launches these instances at runtime, outside Terraform, so provider
     # default_tags don't reach them — replicate them here for cost/ownership tagging.
-    tags = {
+    tags = merge({
       ManagedBy = "Terraform"
       Project   = var.project_name
       Stack     = "app"
-    }
+    }, local.optional_tags)
   }
 
   lifecycle {

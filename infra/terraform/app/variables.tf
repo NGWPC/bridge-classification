@@ -32,6 +32,18 @@ variable "region" {
   }
 }
 
+variable "team" {
+  description = "Team name for cost-allocation and ownership tagging (omitted from tags if empty)"
+  type        = string
+  default     = ""
+}
+
+variable "poc" {
+  description = "Point of contact for these resources (omitted from tags if empty)"
+  type        = string
+  default     = ""
+}
+
 # ----- From the foundation layer (paste from its `terraform output`) -----
 
 variable "subnets" {

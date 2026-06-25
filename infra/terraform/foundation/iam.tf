@@ -11,7 +11,8 @@ locals {
 # writes predictions. Scoped to the single data bucket.
 
 resource "aws_iam_role" "batch_job" {
-  name = "${var.project_name}-batch-job"
+  count = var.create_iam ? 1 : 0
+  name  = "${var.project_name}-batch-job"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -24,8 +25,9 @@ resource "aws_iam_role" "batch_job" {
 }
 
 resource "aws_iam_role_policy" "batch_job" {
-  name = "${var.project_name}-batch-job"
-  role = aws_iam_role.batch_job.id
+  count = var.create_iam ? 1 : 0
+  name  = "${var.project_name}-batch-job"
+  role  = aws_iam_role.batch_job[0].id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -50,7 +52,8 @@ resource "aws_iam_role_policy" "batch_job" {
 # The ECS agent on each EC2 instance: registers, pulls from ECR, ships awslogs.
 
 resource "aws_iam_role" "batch_instance" {
-  name = "${var.project_name}-batch-instance"
+  count = var.create_iam ? 1 : 0
+  name  = "${var.project_name}-batch-instance"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -63,19 +66,22 @@ resource "aws_iam_role" "batch_instance" {
 }
 
 resource "aws_iam_instance_profile" "batch_instance" {
-  name = "${var.project_name}-batch-instance"
-  role = aws_iam_role.batch_instance.name
+  count = var.create_iam ? 1 : 0
+  name  = "${var.project_name}-batch-instance"
+  role  = aws_iam_role.batch_instance[0].name
 }
 
 resource "aws_iam_role_policy_attachment" "batch_instance_ecs" {
-  role       = aws_iam_role.batch_instance.name
+  count      = var.create_iam ? 1 : 0
+  role       = aws_iam_role.batch_instance[0].name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role"
 }
 
 # awslogs driver runs under the instance role on EC2 launch type — grant scoped logs.
 resource "aws_iam_role_policy" "batch_instance_logs" {
-  name = "${var.project_name}-batch-instance-logs"
-  role = aws_iam_role.batch_instance.id
+  count = var.create_iam ? 1 : 0
+  name  = "${var.project_name}-batch-instance-logs"
+  role  = aws_iam_role.batch_instance[0].id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -91,7 +97,8 @@ resource "aws_iam_role_policy" "batch_instance_logs" {
 # ----- Spot Fleet role -----
 
 resource "aws_iam_role" "spot_fleet" {
-  name = "${var.project_name}-spot-fleet"
+  count = var.create_iam ? 1 : 0
+  name  = "${var.project_name}-spot-fleet"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -104,7 +111,8 @@ resource "aws_iam_role" "spot_fleet" {
 }
 
 resource "aws_iam_role_policy_attachment" "spot_fleet" {
-  role       = aws_iam_role.spot_fleet.name
+  count      = var.create_iam ? 1 : 0
+  role       = aws_iam_role.spot_fleet[0].name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetTaggingRole"
 }
 
@@ -112,6 +120,6 @@ resource "aws_iam_role_policy_attachment" "spot_fleet" {
 # Account-global; AWS may have auto-created it already. Toggle off to skip and reference it.
 
 resource "aws_iam_service_linked_role" "batch" {
-  count            = var.create_batch_service_linked_role ? 1 : 0
+  count            = var.create_iam && var.create_batch_service_linked_role ? 1 : 0
   aws_service_name = "batch.amazonaws.com"
 }
