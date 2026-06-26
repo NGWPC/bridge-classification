@@ -1,12 +1,10 @@
 # Bridge Classification — Infrastructure (Terraform)
 
-Layered Terraform that provisions **all** AWS resources for the bridge-classification batch
-inference pipeline.
+Layered Terraform that provisions **all** AWS resources for the bridge-classification batch inference pipeline.
 
 ## Layout
 
-Three layers, applied in order. Each has its own remote state; each layer's outputs feed the
-next layer's `terraform.tfvars`:
+Three layers, applied in order. Each has its own remote state; each layer's outputs feed the next layer's `terraform.tfvars`:
 
 ```
 bootstrap ──(state bucket)──▶ foundation ──(subnet IDs, role ARNs)──▶ app
@@ -61,9 +59,7 @@ terraform output                                # bucket_name → foundation/app
 
 ### 2. foundation
 
-Creates IAM (Batch job / instance / spot-fleet roles + Batch service-linked role) and, by
-default, networking (VPC + public subnets + SG). Outputs the subnet IDs / SG / role ARNs that
-`app` consumes.
+Creates IAM (Batch job / instance / spot-fleet roles + Batch service-linked role) and, by default, networking (VPC + public subnets + SG). Outputs the subnet IDs / SG / role ARNs that `app` consumes.
 
 ```bash
 cd infra/terraform/foundation
@@ -80,14 +76,39 @@ terraform output                              # feed these values into app/terra
 - Set it `false` to create **none** of that and instead reference an existing VPC via `existing_subnet_ids` + `existing_security_group_id`.
 - Either way foundation's `subnet_ids` / `batch_security_group_id` outputs resolve to the right values, so `app` is unaffected.
 
+**IAM toggle.**
+- `create_iam` (default `true`) creates Batch IAM roles (job, instance + profile, spot-fleet, service-linked).
+- Set it `false` to reference existing roles via `existing_batch_job_role_arn`, `existing_batch_instance_profile_arn`, `existing_spot_fleet_role_arn`, `existing_batch_service_role_arn`.
+- Either way foundation's role ARN outputs resolve to the right values, so `app` is unaffected.
+
+**Ownership tags.** Optional `team` and `poc` variables (empty by default). When set, `Team` and `POC` tags are added to all resources. Omitted from tags when empty — OWP deployments can skip them.
+
 `data_bucket` scopes the Batch job role to the bucket holding the model / input / predictions.
+
+**Example `terraform.tfvars` for enterprise/sandbox** (existing IAM + existing VPC):
+
+```hcl
+allowed_account_id = "123456789012"
+data_bucket        = "my-data-bucket"
+team               = "my-team"
+poc                = "my-name"
+
+# Use existing IAM roles (skip role creation)
+create_iam                          = false
+existing_batch_job_role_arn         = "arn:aws:iam::123456789012:role/bridge-classifier-batch-job"
+existing_batch_instance_profile_arn = "arn:aws:iam::123456789012:instance-profile/bridge-classifier-batch-instance"
+existing_spot_fleet_role_arn        = "arn:aws:iam::123456789012:role/bridge-classifier-spot-fleet"
+existing_batch_service_role_arn     = "arn:aws:iam::123456789012:role/aws-service-role/batch.amazonaws.com/AWSServiceRoleForBatch"
+
+# Use existing VPC (skip VPC creation)
+create_networking          = false
+existing_subnet_ids        = ["subnet-abc123", "subnet-def456"]
+existing_security_group_id = "sg-abc123"
+```
 
 ### 3. app
 
-The workload: ECR repo, CloudWatch log group, Batch compute environment / queue / job
-definition. Consumes foundation's outputs (subnets, SG, role ARNs) via its tfvars, plus the S3
-data config. Re-exposes `ecr_repository_url`, `job_queue_name`, `job_definition_name`, `aws_region`,
-etc. that `scripts/build_and_push.sh` and `scripts/submit_batch_job.py` read via `terraform output`.
+The workload: ECR repo, CloudWatch log group, Batch compute environment / queue / job definition. Consumes foundation's outputs (subnets, SG, role ARNs) via its tfvars, plus the S3 data config. Re-exposes outputs that `scripts/build_and_push.sh` and `scripts/submit_batch_job.py` read via `terraform output`: `ecr_repository_url`, `job_queue_name`, `job_definition_name`, `compute_environment_name`, `log_group_name`, `s3_manifest_uri`, `aws_region`, `s3_bucket`, `s3_output_prefix`.
 
 ```bash
 cd infra/terraform/app
@@ -101,6 +122,4 @@ terraform output
 
 ## Per-account config
 
-Each account keeps its own `backend.hcl` + `terraform.tfvars` per layer. If the account already
-has a VPC, set `create_networking = false` and supply its subnet/SG IDs — everything downstream
-is identical.
+Each account keeps its own `backend.hcl` + `terraform.tfvars` per layer. If the account already has a VPC, set `create_networking = false` and supply its subnet/SG IDs — everything downstream is identical.

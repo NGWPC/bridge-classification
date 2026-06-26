@@ -1,6 +1,6 @@
 # AWS Batch Inference
 
-Scale inference to thousands of millions of bridges in parallel using AWS Batch array jobs with SPOT instance support. Infrastructure is managed with Terraform; job submission, entrypoint, and post-run audit are Python scripts.
+Scale inference to hundreds of thousands of bridges in parallel using AWS Batch array jobs with SPOT instance support. Infrastructure is managed with Terraform; job submission, entrypoint, and post-run audit are Python scripts.
 
 Each array child downloads the manifest and model, computes its chunk, then processes bridges one at a time: download → infer → upload → cleanup. Per-bridge upload with skip-if-exists makes SPOT interruption cheap (loses at most 1 in-progress bridge).
 
@@ -117,66 +117,17 @@ python scripts/post_run_report.py --bucket ... --profile data-account --batch-pr
 
 ## Quick Start
 
-### 1. Configure
+### 1. Configure & Deploy Infrastructure
 
-Infrastructure is layered: `bootstrap` (state bucket) → `foundation` (IAM + networking) → `app` (workload). Bootstrap and foundation are applied once per account; day-to-day changes only touch `app`. See `infra/terraform/README.md` for the full layered apply guide.
-
-Copy the app example and fill in your values (`terraform.tfvars` is gitignored):
+Follow [`infra/terraform/README.md`](../infra/terraform/README.md) to deploy all three layers (bootstrap → foundation → app). Each layer has a `backend.hcl.example` and `terraform.tfvars.example` — copy both and fill in your values. Bootstrap and foundation are applied once per account; for day-to-day config changes (S3 paths, model URI, instance types), only the app layer needs re-applying:
 
 ```bash
-cd infra/terraform/app
-cp terraform.tfvars.example terraform.tfvars
+cd infra/terraform/app && terraform plan && terraform apply
 ```
 
-Edit `terraform.tfvars` with foundation outputs (subnets, SG, role ARNs) and your S3 paths. Examples below use `my-bucket` as the bucket — replace with your own:
+See [Configuration Reference](#configuration-reference) for all app-layer variables.
 
-```hcl
-# infra/terraform/app/terraform.tfvars
-
-allowed_account_id = "123456789012"
-
-# --- From foundation's `terraform output` ---
-subnets                    = ["subnet-...", "subnet-..."]
-batch_security_group_id    = "sg-..."
-batch_job_role_arn         = "arn:aws:iam::123456789012:role/bridge-classifier-batch-job"
-batch_instance_profile_arn = "arn:aws:iam::123456789012:instance-profile/bridge-classifier-batch-instance"
-spot_fleet_role_arn        = "arn:aws:iam::123456789012:role/bridge-classifier-spot-fleet"
-batch_service_role_arn     = "arn:aws:iam::123456789012:role/aws-service-role/batch.amazonaws.com/AWSServiceRoleForBatch"
-
-# --- S3 / Inference config — change these for new runs ---
-s3_bucket        = "my-bucket"
-s3_input_prefix  = "bridge-classification/ml-data/source"
-s3_manifest_uri  = "s3://my-bucket/bridge-classification/ml-data/split_test_ids.txt"
-s3_model_uri     = "s3://my-bucket/path/to/your-model.ckpt"
-s3_output_prefix = "scratch/your-name/predictions"
-
-# Compute (optional tweaks)
-# use_spot       = true             # ~60-70% cost savings (auto-retries on interruption)
-# instance_types = ["g4dn.xlarge"]
-# max_vcpus      = 256
-
-# Inference runtime (defaults shown — override at submit time via --env if needed)
-# inference_mode = "masked"         # "masked", "raw", or "both"
-# bridge_timeout = 150              # per-bridge timeout in seconds
-# retry_attempts = 3                # SPOT interruption retries
-```
-
-See [Configuration Reference](#configuration-reference) for all available options.
-
-### 2. Deploy Infrastructure
-
-First-time setup requires all three layers (see `infra/terraform/README.md`). For day-to-day config changes (S3 paths, instance types, etc.), only the app layer needs re-applying:
-
-```bash
-cd infra/terraform/app
-terraform init -backend-config=backend.hcl   # first time only
-terraform plan                                # preview changes
-terraform apply                               # create/update resources
-```
-
-This creates: ECR repository, Batch compute environment, job queue, and job definition (with your S3 config baked into the job definition env vars).
-
-### 3. Build and Push Docker Image
+### 2. Build and Push Docker Image
 
 ```bash
 export AWS_PROFILE=my-profile
@@ -187,42 +138,30 @@ chmod +x ./scripts/build_and_push.sh
 
 Only needed when you change code (`src/`, `scripts/`, or `Dockerfile`). Changing S3 paths or inference config in `infra/terraform/app/terraform.tfvars` does **not** require a rebuild — those are environment variables in the job definition.
 
-### 4. Submit a Job
+### 3. Submit a Job
 
 ```bash
-# Dry run — shows array size, cost estimate, container overrides (does NOT submit)
+# Dry run (preview without submitting — add --dry-run)
 python scripts/submit_batch_job.py \
     --manifest s3://my-bucket/bridge-classification/ml-data/split_test_ids.txt \
-    --profile my-profile \
     --dry-run
 
 # Submit array job from S3 manifest
 python scripts/submit_batch_job.py \
-    --manifest s3://my-bucket/bridge-classification/ml-data/split_test_ids.txt \
-    --profile my-profile
+    --manifest s3://my-bucket/bridge-classification/ml-data/split_test_ids.txt
 
-# Override inference mode and output prefix for one run
+# Override inference mode and timeout for one run
 python scripts/submit_batch_job.py \
     --manifest s3://my-bucket/bridge-classification/ml-data/split_test_ids.txt \
-    --profile my-profile \
     --env INFERENCE_MODE=both \
-    --env S3_OUTPUT_PREFIX=scratch/myfolder/bridge-classification-test/predictions
-
-# Single job (no array, processes all bridges sequentially)
-python scripts/submit_batch_job.py --single
-
-# Validate manifest format before submitting
-python scripts/submit_batch_job.py \
-    --manifest s3://my-bucket/bridge-classification/ml-data/split_test_ids.txt \
-    --profile my-profile \
-    --validate
+    --env BRIDGE_TIMEOUT=300
 ```
 
 The `--profile` flag controls which AWS profile is used to read the manifest from S3 (for line counting).
 
 Run tracking (`_run_config.json`) is saved automatically — `s3_bucket` and `s3_output_prefix` are read from terraform outputs. Override with `--bucket` and `--output-prefix` if needed, or via `--env S3_OUTPUT_PREFIX=...` for a different output path.
 
-### 5. Monitor
+### 4. Monitor
 
 The submit script prints a link to the Batch console. Logs are written to CloudWatch log group `/aws/batch/bridge-classifier` with structured fields for querying.
 
@@ -243,27 +182,11 @@ Example log lines:
 **CloudWatch Insights queries:**
 
 ```
-# Find all failures with reason breakdown
-fields @timestamp, @message
-| filter @message like /INFER_FAILED/
-| parse @message "reason=* " as reason
-| sort @timestamp desc
-
 # Failures by reason (timeout vs inference_error vs other)
 fields @timestamp, @message
 | filter @message like /INFER_FAILED/
 | parse @message "reason=* " as reason
 | stats count() by reason
-
-# Find bridges skipped due to too few points
-fields @timestamp, @message
-| filter @message like /SKIP_SMALL_FILE/
-| sort @timestamp desc
-
-# Find OOM errors (GPU out of memory)
-fields @timestamp, @message
-| filter @message like /CUDA out of memory/ or @message like /OutOfMemoryError/
-| sort @timestamp desc
 
 # Average bridge processing time per child
 fields @timestamp, @message
@@ -277,22 +200,18 @@ fields @timestamp, @message
 | parse @message "succeeded=* failed=* skipped_exists=* skipped_too_few_points=* download_failed=*" as ok, fail, skip_exists, skip_few_pts, dl_fail
 | stats sum(ok) as total_ok, sum(fail) as total_fail, sum(skip_exists) as total_skip_exists, sum(skip_few_pts) as total_skip_too_few_points, sum(dl_fail) as total_dl_fail
 
-# All non-success events (quick triage)
+# Find OOM errors
 fields @timestamp, @message
-| filter @message like /FAILED/ or @message like /TIMEOUT/ or @message like /SKIP_SMALL/
+| filter @message like /CUDA out of memory/ or @message like /OutOfMemoryError/
 | sort @timestamp desc
-| limit 200
 ```
 
 ```bash
 # Tail logs in terminal
 aws logs tail /aws/batch/bridge-classifier --follow --profile my-profile
-
-# List running jobs
-aws batch list-jobs --job-queue bridge-classifier-inference-queue --job-status RUNNING --profile my-profile
 ```
 
-### 6. Audit Outputs
+### 5. Audit Outputs
 
 After all children complete, verify that every expected output exists in S3:
 
@@ -331,7 +250,7 @@ python scripts/submit_batch_job.py \
 
 Re-submission is safe — skip-if-exists means already-completed bridges are skipped.
 
-### 7. Post-Run Report
+### 6. Post-Run Report
 
 After all children complete, generate a comprehensive report with audit results, CloudWatch aggregation, and per-bridge timing:
 
@@ -350,7 +269,7 @@ This reads `_run_config.json` (saved at submission), audits S3 outputs, queries 
 
 Use `--skip-timing` for a faster report without per-bridge p50/p95 stats.
 
-### 8. Cleanup
+### 7. Cleanup
 
 To tear down all Batch infrastructure, destroy layers in reverse order:
 
@@ -393,9 +312,7 @@ Example with 1,500,000 bridges:
 | Files per child | ~150 (auto-adjusted)              |
 
 
-When the array size is capped at 10K, the submit script reports: `Array size: 10000 (capped from ideal 25000; chunk_target=60 requested → actual ~150 per child)`.
-
-The entrypoint re-counts the actual manifest, so chunk boundaries adapt even if `--total` was approximate.
+When capped, the submit script reports the actual chunk size per child.
 
 ---
 
@@ -467,14 +384,18 @@ All variables are defined in `infra/terraform/app/variables.tf` with defaults. O
 | `allowed_account_id` | (required)          | 12-digit AWS account ID — safety guard     |
 | `region`             | `us-east-1`         | AWS region                                 |
 | `project_name`       | `bridge-classifier` | Prefix for all resource names              |
+| `team`               | `""`                | Team name for cost-allocation tagging (omitted if empty) |
+| `poc`                | `""`                | Point of contact for resources (omitted if empty) |
 
 
-### IAM Roles (managed by the foundation layer)
+### Foundation Inputs (managed by the foundation layer)
 
 Paste these from `cd infra/terraform/foundation && terraform output`:
 
 | Variable                     | Description                                            |
 | ---------------------------- | ------------------------------------------------------ |
+| `subnets`                    | Subnet IDs for the Batch compute environment           |
+| `batch_security_group_id`    | Security group ID for Batch compute                    |
 | `batch_job_role_arn`         | IAM role for job containers (S3 read/write scoped to data bucket) |
 | `batch_instance_profile_arn` | EC2 instance profile for compute instances             |
 | `spot_fleet_role_arn`        | EC2 Spot Fleet role (only used when `use_spot = true`) |
@@ -500,6 +421,7 @@ Paste these from `cd infra/terraform/foundation && terraform output`:
 | `job_memory`          | `15000` | Memory (MB) per container                  |
 | `shared_memory_size`  | `4096`  | Shared memory (MB) for PyTorch/spconv      |
 | `job_timeout_seconds` | `28800` | Max wall-clock seconds per child (8 hours) |
+| `image_tag`           | `latest`| ECR image tag (pin to avoid breaking in-flight jobs) |
 
 
 ### S3 / Inference
@@ -544,6 +466,8 @@ cd infra/terraform/app && terraform output
 | `log_group_name`           | CloudWatch log group for Batch job logs |
 | `s3_manifest_uri`          | S3 manifest URI (passthrough)           |
 | `aws_region`               | AWS region (passthrough for scripts)    |
+| `s3_bucket`                | S3 data bucket (passthrough for run tracking) |
+| `s3_output_prefix`         | S3 output prefix (passthrough for run tracking) |
 
 
 ---
@@ -552,56 +476,17 @@ cd infra/terraform/app && terraform output
 
 ### Direct Inference (no S3)
 
-Use `src/inference.py` to run inference on local files without any S3 or Batch setup. The model is loaded once and reused for all files. Requires an NVIDIA GPU (spconv-cu120).
-
-**Single file, masked mode** (default — bridge deck overlaid on original lidar):
+Use `src/inference.py` to run inference on local files without any S3 or Batch setup. Requires an NVIDIA GPU (spconv-cu120). The model is loaded once and reused for all files.
 
 ```bash
 python src/inference.py \
     --model ./experiments/bridge-base-all-data-v0/version_0/checkpoints/epoch=35.ckpt \
     --input ./data/ml-data/testing/02050206/bridge_10598181_USGS_LPC_PA_SouthCentral_B2_2017.laz \
-    --output ./data/ml-data/predictions/bridge_10598181_bridge_masked.laz
-```
-
-**Single file, raw mode** (all model labels replace original classification):
-
-```bash
-python src/inference.py \
-    --model ./experiments/bridge-base-all-data-v0/version_0/checkpoints/epoch=35.ckpt \
-    --input ./data/ml-data/testing/02050206/bridge_10598181_USGS_LPC_PA_SouthCentral_B2_2017.laz \
-    --output ./data/ml-data/predictions/bridge_10598181_predicted.laz \
-    --mode raw
-```
-
-**Single file, both mode** (saves raw `_predicted` and masked `_bridge_masked` side by side):
-
-```bash
-python src/inference.py \
-    --model ./experiments/bridge-base-all-data-v0/version_0/checkpoints/epoch=35.ckpt \
-    --input ./data/ml-data/testing/02050206/bridge_10598181_USGS_LPC_PA_SouthCentral_B2_2017.laz \
-    --output ./data/ml-data/predictions/bridge_10598181_predicted.laz \
-    --mode both
-```
-
-With `--mode both`, the `--output` path receives the raw prediction (`_predicted.laz`) and a masked file (`_bridge_masked.laz`) is written alongside it in the same directory, deriving the name from the input file stem.
-
-**Batch mode with pairs file** (process multiple files, model loaded once):
-
-```bash
-python src/inference.py \
-    --model ./experiments/bridge-base-all-data-v0/version_0/checkpoints/epoch=35.ckpt \
-    --pairs-file ./pairs.tsv \
+    --output ./data/ml-data/predictions/bridge_10598181_bridge_masked.laz \
     --mode masked
 ```
 
-The pairs file is tab-separated with one input/output pair per line:
-
-```
-/path/to/input1.laz	/path/to/output1.laz
-/path/to/input2.laz	/path/to/output2.laz
-```
-
-For large batches, use `--bridge-timeout` to skip bridges that hang (default: 150 seconds).
+Modes: `masked` (default), `raw`, `both`. With `--mode both`, both `_predicted.laz` and `_bridge_masked.laz` are written. For batch processing, use `--pairs-file` with a tab-separated input/output file. Run `python src/inference.py --help` for all options.
 
 ### Testing Batch Entrypoint Locally
 
@@ -609,7 +494,7 @@ Test the full S3-based entrypoint locally before submitting to Batch:
 
 ```bash
 # Set env vars to simulate Batch
-export AWS_PROFILE=Data
+export AWS_PROFILE=my-profile
 export S3_BUCKET=my-bucket
 export S3_INPUT_PREFIX=bridge-classification/ml-data/source
 export S3_MANIFEST_URI=s3://my-bucket/bridge-classification/test_manifest.txt
