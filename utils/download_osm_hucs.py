@@ -356,4 +356,4 @@ if __name__ == "__main__":
 # Download mode (limit 100 HUCs):
 #   python utils/download_osm_hucs.py --profile esip --dir ./data/osm/hucs --limit 100 --save-subsets lidar
 # Download mode (all HUCs): (use trailing slash in prefix)
-#   python utils/download_osm_hucs.py --profile esip --dir ./data/osm/hucs --all --bucket fimc-data --prefix bridge-classification/osm/hucs/ --save-subsets not_lidar
+#   python utils/download_osm_hucs.py --profile esip --dir ./data/osm/hucs --all --bucket my-bucket --prefix bridge-classification/osm/hucs/ --save-subsets not_lidar

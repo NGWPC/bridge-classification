@@ -10,7 +10,7 @@ Example usage:
         --log-dirs logs/server-logs/ \
         --exclude-ids data/ml-data/split_train_ids.txt data/ml-data/split_val_ids.txt data/ml-data/split_test_ids.txt \
         --source-s3-uri s3://bucket/path/to/source/ \
-        --profile my-aws-profile \
+        --profile my-profile \
         --output data/ml-data/complex_bridges_all.csv \
         --sample-output data/ml-data/complex_bridges_sample_50.csv \
         --sample-size 50 \

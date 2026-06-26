@@ -1,5 +1,7 @@
 # Module Reference
 
+> **Note:** This document is a handoff snapshot of the public API. For authoritative function signatures and CLI arguments, run `python <script> --help` and read the source docstrings.
+
 Summary of every module's public API and CLI arguments.
 
 ---
@@ -508,10 +510,12 @@ Splits bridge data into train/validation/test by HUC.
 | `--npy-dir`          | `./data/ml-data/silver_training_normalized` | Normalized NPY directory                                 |
 | `--output-dir`       | `./data/ml-data`                            | Output base directory                                    |
 | `--holdout-test-ids` | None                                        | File with fixed test IDs (`huc_id/bridge_stem` per line) |
-| `--train-ratio`      | 0.8                                         | Training split fraction                                  |
-| `--val-ratio`        | 0.2                                         | Validation split fraction                                |
+| `--train-ratio`      | 0.70                                        | Training split fraction                                  |
+| `--val-ratio`        | 0.15                                        | Validation split fraction                                |
+| `--test-ratio`       | 0.15                                        | Test split fraction                                      |
 | `--symlink`          | False                                       | Create symlinks instead of copies                        |
 | `--seed`             | 27                                          | Random seed for reproducibility                          |
+| `--workers`          | CPU count                                   | Parallel workers for file transfer                       |
 
 
 ---
@@ -535,7 +539,9 @@ Computes inverse-frequency class weights from preprocessed `.json` metadata.
 | Argument     | Default                   | Description                                 |
 | ------------ | ------------------------- | ------------------------------------------- |
 | `--data-dir` | `./data/ml-data/training` | Directory containing `.json` metadata files |
-| `--output`   | `class_weights.json`      | Output JSON file path                       |
+| `--output`   | None                      | Output JSON file path (optional)            |
+| `--verbose`  | False                     | Print raw total_counts and weights_list     |
+| `--workers`  | 1                         | Parallel workers for reading JSON files     |
 
 
 ---
@@ -560,11 +566,12 @@ Plots training curves from PyTorch Lightning CSVLogger output.
 | `--csv`              | None                   | Direct path to `metrics.csv`                       |
 | `--root`             | `./experiments`        | Experiments root directory                         |
 | `--exp`              | `bridge_classify_base` | Experiment name                                    |
-| `--ver`              | latest                 | Version number                                     |
+| `--ver`              | 0                      | Version number (int)                               |
 | `--compare`          | None                   | Comma-separated experiment names to plot together  |
-| `--compare-versions` | `0,0,...`              | Comma-separated versions for compare mode          |
+| `--compare-versions` | None                   | Comma-separated versions for compare mode (default: 0 for all) |
 | `--merge-resumed`    | False                  | Merge two experiments into one continuous timeline |
-| `--out`              | auto                   | Output PNG file path                               |
+| `--out`              | None                   | Output PNG file path (auto-derived from experiment path) |
+| `--annotate-best`    | None                   | Validation metric to annotate with best epoch      |
 
 
 ---
@@ -582,15 +589,19 @@ Renders side-by-side 3D LiDAR point cloud figures for poster/presentation use.
 
 **CLI arguments (both modes):**
 
-| Argument       | Default               | Description                              |
-| -------------- | --------------------- | ---------------------------------------- |
-| `-o`/`--output` | `notebooks/outputs/` | Output PNG file path                     |
-| `--title`      | None                  | Figure suptitle                          |
-| `--elev`       | 30                    | 3D view elevation angle                  |
-| `--azim`       | 225                   | 3D view azimuth angle                    |
-| `--point-size` | 8                     | Scatter point size                       |
-| `--max-points` | 50000                 | Downsample limit per cloud               |
-| `--dpi`        | 300                   | Output resolution                        |
+| Argument          | Default                                    | Description                              |
+| ----------------- | ------------------------------------------ | ---------------------------------------- |
+| `-o`/`--output`   | `notebooks/outputs/gold_vs_model.png` (or `source_vs_silver.png`) | Output PNG file path |
+| `--title`         | None                                       | Figure suptitle                          |
+| `--elev`          | 30                                         | 3D view elevation angle                  |
+| `--azim`          | 225                                        | 3D view azimuth angle                    |
+| `--point-size`    | 8                                          | Scatter point size                       |
+| `--max-points`    | 50000                                      | Downsample limit per cloud               |
+| `--dpi`           | 300                                        | Output resolution                        |
+| `--font-scale`    | 1.0                                        | Multiply all font sizes (1.5-1.8 for posters) |
+| `--bg-color`      | `white`                                    | Figure background color                  |
+| `--border-color`  | `#cccccc`                                  | Border color                             |
+| `--border-width`  | 0                                          | Border width in points (0 = no border)   |
 
 **Example:**
 
@@ -625,13 +636,16 @@ Downloads OSM bridge GeoPackages by HUC from S3.
 **CLI arguments:**
 
 
-| Argument    | Default | Description                                    |
-| ----------- | ------- | ---------------------------------------------- |
-| `--profile` | default | AWS profile name                               |
-| `--dir`     | None    | Local output directory (enables download mode) |
-| `--all`     | False   | Download all HUCs (otherwise uses `--limit`)   |
-| `--limit`   | 10      | Number of HUCs to process in info mode         |
-| `--hucs`    | None    | Specific HUC IDs to download                   |
+| Argument         | Default                      | Description                                              |
+| ---------------- | ---------------------------- | -------------------------------------------------------- |
+| `--profile`      | None                         | AWS profile name                                         |
+| `--dir`          | None                         | Local output directory (enables download mode)           |
+| `--bucket`       | `noaa-nws-owp-fim`           | S3 bucket name                                           |
+| `--prefix`       | `hand_fim/hand_4_8_7_2/`    | Base S3 prefix                                           |
+| `--all`          | False                        | Download all HUCs (otherwise uses `--limit`)             |
+| `--limit`        | 100                          | Number of HUCs to process                                |
+| `--workers`      | CPU count                    | Number of worker processes                               |
+| `--save-subsets` | `both`                       | Which filtered subsets to save: `lidar`, `not_lidar`, or `both` |
 
 
 ---
@@ -650,6 +664,25 @@ Verifies RANSAC determinism across platforms using synthetic bridge data.
 
 
 No CLI arguments. Run directly: `python utils/verify_ransac_parity.py`
+
+---
+
+### `utils/verify_lidar_subset.py`
+
+Verifies that `osm_bridges_lidar_subset__{huc_id}.gpkg` equals the rows of `osm_bridges_subset__{huc_id}.gpkg` where `has_lidar_tif == 'Y'`. Works with local data or S3. Randomly samples HUCs for spot-check.
+
+**CLI arguments:**
+
+
+| Argument    | Default                              | Description                                    |
+| ----------- | ------------------------------------ | ---------------------------------------------- |
+| `--dir`     | `./data/osm/hucs`                   | Local directory containing HUC subdirs         |
+| `--s3`      | False                                | Sample and verify from S3 instead of local     |
+| `--profile` | None                                 | AWS profile (for `--s3`)                       |
+| `--bucket`  | `fimc-data`                          | S3 bucket (for `--s3`)                         |
+| `--prefix`  | `bridge-classification/osm/hucs/`   | S3 prefix (for `--s3`)                         |
+| `--sample`  | 10                                   | Number of HUCs to sample                       |
+
 
 ---
 
@@ -706,7 +739,7 @@ Promotes a model to production in the S3 model registry. Demotes the current pro
 | Argument    | Default                        | Description                                            |
 | ----------- | ------------------------------ | ------------------------------------------------------ |
 | `--name`    | *(required)*                   | Model name to promote (must exist in registry)         |
-| `--bucket`  | `fimc-data`                    | S3 bucket                                              |
+| `--bucket`  | `my-bucket`                    | S3 bucket                                              |
 | `--prefix`  | `bridge-classification/models` | S3 prefix for model registry                           |
 | `--profile` | None                           | AWS profile name                                       |
 | `--dry-run` | False                          | Show what would change without modifying S3             |
@@ -727,7 +760,7 @@ Prints a sorted comparison table of model evaluation metrics from `registry.json
 | `--eval-set` | all                            | Evaluation set to compare; if unset, shows all         |
 | `--sort`     | `bridge_deck_iou`              | Metric to sort by (descending)                         |
 | `--from-s3`  | False                          | Load registry from S3 instead of local file            |
-| `--bucket`   | `fimc-data`                    | S3 bucket (only with `--from-s3`)                      |
+| `--bucket`   | `my-bucket`                    | S3 bucket (only with `--from-s3`)                      |
 | `--prefix`   | `bridge-classification/models` | S3 prefix (only with `--from-s3`)                      |
 | `--profile`  | None                           | AWS profile name                                       |
 
@@ -771,7 +804,7 @@ Evaluates a trained bridge classification model against human-annotated (gold) d
 | `--register`       | False                          | Update model registry with evaluation metrics                         |
 | `--model-name`     | None                           | Registry model name (required with `--register`)                      |
 | `--eval-name`      | `gold-{N}`                     | Evaluation set name for registry key                                  |
-| `--bucket`         | `fimc-data`                    | S3 bucket                                                             |
+| `--bucket`         | `my-bucket`                    | S3 bucket                                                             |
 | `--prefix`         | `bridge-classification/models` | S3 prefix                                                             |
 | `--profile`        | None                           | AWS profile name                                                      |
 
@@ -807,9 +840,9 @@ python utils/evaluate_model.py \
     --inference-dir ./evaluation_results/v3/inference_output \
     --output-dir ./evaluation_results/v3 \
     --register --model-name bridge-base-all-data-v3 \
-    --bucket bucket-name \
-    --prefix prefix-name/models \
-    --profile aws-profile
+    --bucket my-bucket \
+    --prefix bridge-classification/models \
+    --profile my-profile
 ```
 
 ---
@@ -823,13 +856,14 @@ Finds bridge+lidar source combinations not in existing train/val/test splits for
 
 | Argument             | Default                                       | Description                                                    |
 | -------------------- | --------------------------------------------- | -------------------------------------------------------------- |
-| `--proven-linear`    | *(required)*                                  | `true` = same bridge new source; `false` = unseen bridges      |
+| `--proven-linear`    | None                                          | `true` = same bridge new source; `false` = unseen bridges; omit = both |
 | `--sample-size`      | 50                                            | Number of candidates to sample (0 = all)                       |
-| `--max-per-huc`      | 2                                             | Maximum candidates per HUC in sample                           |
-| `--lidar-resources`  | `./data/usgs_entwine/lidar_resources.geojson` | USGS EPT source index                                          |
-| `--hucs-dir`         | `./data/osm/hucs`                             | Directory containing per-HUC GPKG files                        |
-| `--split-dir`        | `./data/ml-data`                              | Directory containing split ID files                            |
-| `--output-dir`       | `./data/ml-data/new-source-candidates`        | Output directory for CSV + helper files                        |
+| `--max-per-huc`      | 3                                             | Maximum candidates per HUC in sample                           |
+| `--lidar-resources`  | *(required)*                                  | USGS EPT source index                                          |
+| `--hucs-dir`         | *(required)*                                  | Directory containing per-HUC GPKG files                        |
+| `--split-dir`        | *(required)*                                  | Directory containing split ID files                            |
+| `--output-dir`       | *(required)*                                  | Output directory for CSV + helper files                        |
+| `--no-progress`      | False                                         | Disable progress bar                                           |
 
 
 **Outputs:** CSV files with candidate bridge+source pairs, plus `sample_hucs.txt` and `sample_osm_ids.txt` for pipeline input.
@@ -872,15 +906,15 @@ Extracts curved/arched bridge rejections from processing logs. Parses logs for b
 
 | Argument           | Default                               | Description                                              |
 | ------------------ | ------------------------------------- | -------------------------------------------------------- |
-| `--log-dirs`       | *(required)*                          | Directory(ies) containing processing log files           |
-| `--exclude-ids`    | None                                  | ID files to exclude (train/val/test split files)         |
-| `--source-s3-uri`  | None                                  | S3 URI prefix for source files (verifies existence)      |
-| `--profile`        | None                                  | AWS profile name                                         |
-| `--output`         | `complex_bridges_all.csv`             | Output CSV of all unique complex bridges                 |
-| `--sample-output`  | `complex_bridges_sample_50.csv`       | Output CSV of stratified sample                          |
-| `--sample-size`    | 50                                    | Number of bridges to sample                              |
-| `--max-per-huc`    | 2                                     | Maximum bridges per HUC in the sample                    |
-| `--seed`           | 27                                    | Random seed for reproducibility                          |
+| `--log-dirs`       | `logs/server-logs/`                          | Directory(ies) containing processing log files           |
+| `--exclude-ids`    | None                                         | ID files to exclude (train/val/test split files)         |
+| `--source-s3-uri`  | None                                         | S3 URI prefix for source files (verifies existence)      |
+| `--profile`        | None                                         | AWS profile name                                         |
+| `--output`         | `data/ml-data/complex_bridges_all.csv`       | Output CSV of all unique complex bridges                 |
+| `--sample-output`  | `data/ml-data/complex_bridges_sample_100.csv`| Output CSV of stratified sample                          |
+| `--sample-size`    | 100                                          | Number of bridges to sample                              |
+| `--max-per-huc`    | 3                                            | Maximum bridges per HUC in the sample                    |
+| `--seed`           | 27                                           | Random seed for reproducibility                          |
 
 
 ---
@@ -940,23 +974,7 @@ AWS Batch entrypoint — per-bridge processing loop with SPOT handling. Imports 
 
 Submit single or array Batch jobs. Reads terraform outputs for AWS config, counts manifest lines from S3, and computes array size.
 
-**CLI arguments:**
-
-
-| Argument         | Default            | Description                                    |
-| ---------------- | ------------------ | ---------------------------------------------- |
-| `--manifest`     | None               | S3 URI of manifest file                        |
-| `--total`        | None               | Total file count (skip manifest download)      |
-| `--single`       | False              | Submit single job (no array)                   |
-| `--dry-run`      | False              | Print config without submitting                |
-| `--validate`     | False              | Validate manifest format                       |
-| `--chunk-target` | 60                 | Target files per array child                   |
-| `--env`          | []                 | Environment override as KEY=VALUE (repeatable) |
-| `--job-name`     | `bridge-inference` | Job name prefix                                |
-| `--profile`      | None               | AWS profile for S3 manifest access             |
-| `--bucket`       | None               | S3 bucket for saving `_run_config.json`        |
-| `--output-prefix`| None               | S3 output prefix for saving `_run_config.json` |
-
+See [AWS Batch Inference](aws-batch-inference.md) for detailed usage, examples, and the profile configuration guide.
 
 ---
 
@@ -964,21 +982,7 @@ Submit single or array Batch jobs. Reads terraform outputs for AWS config, count
 
 Post-run verification — checks all expected outputs exist in S3. Uses parallel `head_object` checks (200 threads by default).
 
-**CLI arguments:**
-
-
-| Argument          | Default      | Description                                       |
-| ----------------- | ------------ | ------------------------------------------------- |
-| `--manifest`      | *(required)* | S3 URI of manifest file                           |
-| `--bucket`        | *(required)* | S3 bucket for outputs                             |
-| `--input-prefix`  | `""`         | S3 prefix for input files (for extension probing) |
-| `--output-prefix` | *(required)* | S3 prefix for output files                        |
-| `--mode`          | `masked`     | Inference mode (determines expected filenames)    |
-| `--write-missing` | None         | Write missing manifest lines to this file         |
-| `--workers`       | 200          | Parallel S3 check workers                         |
-| `--profile`       | None         | AWS profile                                       |
-| `--save-to-s3`    | False        | Upload audit summary JSON to `{output-prefix}/_audit_results.json` |
-
+See [AWS Batch Inference](aws-batch-inference.md) for detailed usage, examples, and the profile configuration guide.
 
 ---
 
@@ -986,19 +990,4 @@ Post-run verification — checks all expected outputs exist in S3. Uses parallel
 
 Post-run report generator. Reads `_run_config.json` (saved by `submit_batch_job.py`), audits S3 outputs, queries CloudWatch for per-child summaries and per-bridge timing, and saves `_run_report.json` to the output prefix.
 
-**CLI arguments:**
-
-
-| Argument          | Default      | Description                                          |
-| ----------------- | ------------ | ---------------------------------------------------- |
-| `--bucket`        | *(required)* | S3 bucket                                            |
-| `--output-prefix` | *(required)* | S3 output prefix (where predictions are)             |
-| `--input-prefix`  | `""`         | S3 input prefix (for extension probing during audit) |
-| `--mode`          | `masked`     | Inference mode (determines expected filenames)       |
-| `--audit-workers` | 200          | Parallel S3 audit workers                            |
-| `--skip-timing`   | False        | Skip per-bridge timing extraction (faster)           |
-| `--region`        | `us-east-1`  | AWS region for Batch and CloudWatch                  |
-| `--profile`       | None         | AWS profile for S3 operations                        |
-| `--batch-profile` | None         | AWS profile for Batch and CloudWatch (defaults to `--profile`) |
-
-
+See [AWS Batch Inference](aws-batch-inference.md) for detailed usage, examples, and the profile configuration guide.

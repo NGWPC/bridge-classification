@@ -11,6 +11,8 @@ USGS 3DEP data into 4 semantic classes using a sparse 3D U-Net. The pipeline cov
 data acquisition through inference, with automated weak supervision for scalable
 training data generation (550K+ bridges).
 
+See [Architecture](architecture.md) for the classification schema and system design.
+
 ## Documentation
 
 | Document | Description |
@@ -21,30 +23,6 @@ training data generation (550K+ bridges).
 | [Module Reference](module-reference.md) | Every module's public API and CLI arguments |
 | [Design Decisions](decisions.md) | Rationale for key architectural choices |
 
-## Quick Reference
+## Getting Started
 
-### Classification Schema
-
-| Model Class | Name | ASPRS Input | ASPRS Output |
-|-------------|------|-------------|--------------|
-| 0 | Background/Unclassified | 1, 7, others | 1 |
-| 1 | Ground/Water | 2 (Ground), 9 (Water) | 2 |
-| 2 | Bridge Deck | 17 | 17 |
-| 3 | Obstacles/High Noise | 18 | 18 |
-
-### Pipeline Stages
-
-```mermaid
-flowchart LR
-  A[OSM Bridges + USGS EPT] --> B[Download & Weak Supervise]
-  B --> C[Preprocess & Normalize]
-  C --> D[Split Train/Val/Test]
-  D --> E[Train Sparse U-Net]
-  D --> F[Compute Class Weights]
-  F --> E
-  E --> G[Inference]
-```
-
-### Getting Started
-
-See the [README](https://github.com/erdc/bridge_classification#readme) for full installation and pipeline run commands.
+See the [README](https://github.com/NGWPC/bridge-classification#readme) for full installation and pipeline run commands.

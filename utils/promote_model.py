@@ -7,12 +7,12 @@ Usage:
     # Dry run (no S3 changes):
     python utils/promote_model.py \
       --name bridge-base-all-data-v3 --dry-run \
-      --bucket fimc-data --prefix bridge-classification/models --profile data
+      --bucket my-bucket --prefix bridge-classification/models --profile my-profile
 
     # Promote for real:
     python utils/promote_model.py \
       --name bridge-base-all-data-v3 \
-      --bucket fimc-data --prefix bridge-classification/models --profile data
+      --bucket my-bucket --prefix bridge-classification/models --profile my-profile
 """
 
 import argparse
