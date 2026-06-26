@@ -13,7 +13,7 @@ Usage:
     python utils/compare_experiments.py --sort bridge_deck_recall
 
     # From S3:
-    python utils/compare_experiments.py --from-s3 --profile data
+    python utils/compare_experiments.py --from-s3 --profile my-profile
 """
 
 import argparse

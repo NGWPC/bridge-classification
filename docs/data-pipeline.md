@@ -125,9 +125,9 @@ silver_training_normalized/{huc_id}/*.npy + *.json
 
 ```
 data/ml-data/
-├── training/{huc_id}/*.npy, *.json     (80% default)
-├── validation/{huc_id}/*.npy, *.json   (20% default)
-├── testing/{huc_id}/*.npy, *.json, *.laz  (holdout, + LAZ for gold labeling)
+├── training/{huc_id}/*.npy, *.json     (70% default)
+├── validation/{huc_id}/*.npy, *.json   (15% default)
+├── testing/{huc_id}/*.npy, *.json, *.laz  (15% default + holdout)
 ├── split_manifest.json
 ├── split_train_ids.txt
 ├── split_val_ids.txt

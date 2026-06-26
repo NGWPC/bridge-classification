@@ -5,14 +5,13 @@ A comprehensive pipeline for processing bridge lidar data organized by Hydrologi
 ## Table of Contents
 
 - [Documentation](#documentation)
-- [Project Overview](#project-overview)
 - [Pipeline Overview](#pipeline-overview)
 - [Installation](#installation)
 - [Model Registry](#model-registry)
 - [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
 - [Data Download](#data-download)
-- [Classification Labels for Training](#classification-labels-for-training)
+- [Classification Labels](#classification-labels)
 - [Output Structure](#output-structure)
 - [Notebooks](#notebooks)
 - [Visualizing training metrics](#visualizing-training-metrics)
@@ -22,7 +21,6 @@ A comprehensive pipeline for processing bridge lidar data organized by Hydrologi
 For detailed design documentation, see the `docs/` directory (or build the docs site with MkDocs):
 
 - **[Architecture](docs/architecture.md)** — System design, classification schema, algorithm details.
-- **[Conda environments](docs/envs.md)** — Full vs data-processing-only envs; use on GPU vs CPU-only machines.
 - **[Data Pipeline](docs/data-pipeline.md)** — Step-by-step data flow walkthrough with data shapes at each stage.
 - **[AWS Batch Inference](docs/aws-batch-inference.md)** — Terraform infrastructure, job submission, SPOT instance handling, inference modes, post-run audit, and configuration reference for scaling inference with AWS Batch array jobs.
 - **[Module Reference](docs/module-reference.md)** — Summary of every module's public API and CLI arguments.
@@ -44,16 +42,6 @@ Open <http://localhost:8000> to preview. Changes to `docs/` are hot-reloaded.
 ```bash
 mkdocs gh-deploy
 ```
-
-## Project Overview
-
-This project provides tools for:
-
-- **Data Download & Weak Supervision**: Downloads lidar data from USGS Entwine sources and applies automated labeling rules to identify bridge decks, ground, water, and obstacles
-- **Data Normalization**: Normalizes point cloud coordinates and remaps classification labels for model training
-- **Model Training**: Prepares normalized data for training sparse 3D U-Net models for bridge point cloud classification
-
-The pipeline processes bridge geometries from OpenStreetMap, finds intersecting lidar sources, applies ground filtering (SMRF), performs quality checks (RANSAC plane fitting, linearity validation), and generates labeled training data.
 
 ## Pipeline Overview
 
@@ -156,8 +144,9 @@ docker compose run --rm bridge-classifier \
   --npy-dir ./data/ml-data/silver_training_normalized \
   --output-dir ./data/ml-data \
   --holdout-test-ids ./data/ml-data/holdout_test.txt \
-  --train-ratio 0.8 \
-  --val-ratio 0.2 \
+  --train-ratio 0.7 \
+  --val-ratio 0.15 \
+  --test-ratio 0.15 \
   --symlink
 
 # Step 3a: Compute class weights (optional). Use output in training with --class-weights ./data/ml-data/class_weights.json
@@ -187,31 +176,9 @@ bridge-classifier python src/train.py \
   --early-stopping-patience 6 \
   --max-voxels 100000 \
   2>&1 | tee experiments/bridge-base-all-data-v0/training_console.log
-
-
-# change rules
-# --batch-size 4 --accumulate-grad-batches 4 → effective 16, ~half the steps per epoch.
-# --batch-size 8 --accumulate-grad-batches 2 → effective 16, ~quarter of the steps (if it doesn’t OOM).
-
-mkdir -p experiments/bridge-base-all-data-v0
-docker compose run --rm \
--e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-bridge-classifier python src/train.py \
-  --train --augment \
-  --val-dir='/data/ml-data/validation' \
-  --train-dir='/data/ml-data/training' \
-  --epochs 25 \
-  --voxel-size 0.1 \
-  --batch-size 16 \
-  --accumulate-grad-batches 1 \
-  --exp-name bridge-base-all-data-v0 \
-  --class-weights /data/ml-data/class_weights.json \
-  --num-workers 10 \
-  --early-stopping \
-  --early-stopping-patience 12 \
-  --max-voxels 100000 \
-  2>&1 | tee experiments/bridge-base-all-data-v0/training_console.log
 ```
+
+> **Batch size tuning:** `effective_batch = batch_size × accumulate_grad_batches`. For example, `--batch-size 16 --accumulate-grad-batches 1` or `--batch-size 4 --accumulate-grad-batches 4` both give effective batch 16.
 
 **Resume training** (continue from a saved checkpoint to more epochs, e.g. 10 → 25): use `--ckpt-path` and a new `--exp-name` so the resumed run writes to a separate experiment directory. Checkpoints are saved under `experiments/<exp_name>/version_0/checkpoints/` (e.g. `last.ckpt`).
 
@@ -277,45 +244,9 @@ docker compose run --rm \
 - **`--finetune`**: Path to a checkpoint for fine-tuning. Loads weights only (fresh optimizer and epoch counter). Mutually exclusive with `--ckpt-path`.
 - **`--freeze-encoder`**: Freeze all encoder layers so only the decoder and classifier are trained. Useful for fine-tuning on small datasets (e.g. gold annotations) where you want to preserve learned encoder features.
 
-Example: train with early stopping on deck IoU (default), or on validation loss for comparison:
-
-```bash
-python src/train.py \
-  --train --augment \
-  --val-dir=./data/ml-data/validation \
-  --epochs 50 \
-  --early-stopping \
-  --early-stopping-patience 10
-
-python src/train.py \
-  --train --augment \
-  --val-dir=./data/ml-data/validation \
-  --epochs 50 \
-  --monitor val_loss \
-  --early-stopping \
-  --early-stopping-patience 10
-```
-
 See [Troubleshooting](#troubleshooting) for permission and other issues.
 
-**Development Mode**:
-
-This opens an interactive shell inside the container where you can run scripts manually or debug.
-
-```bash
-docker compose run --rm bridge-classifier
-# or manually:
-# docker run --gpus all -v "$(pwd):/app" -it bridge-classifier
-```
-
-Once inside the container:
-
-```bash
-python src/download_and_weak_supervise_hucs.py ...
-python src/preprocess_bridges.py ...
-python src/train.py ...
-# Type 'exit' to leave the container
-```
+**Development Mode**: Run `docker compose run --rm bridge-classifier` for an interactive shell (or `docker run --gpus all -v "$(pwd):/app" -it bridge-classifier` without Compose). Then run scripts directly (e.g., `python src/train.py --help`).
 
 #### Option 2: Local Conda Install
 
@@ -334,7 +265,17 @@ python -c "import torch; print(f'CUDA Available: {torch.cuda.is_available()}')"
 
 See [Troubleshooting](#troubleshooting).
 
-**Data-processing only (no GPU):** For running only data-processing utils on a CPU-only machine, use the lighter env that omits PyTorch/CUDA: `conda env create -f environment-data.yaml` then `conda activate bridge-classify-data`. See [Conda environments](docs/envs.md) for details.
+**Data-processing only (no GPU):** For data-processing scripts (download, split, verify, visualize) on a CPU-only machine, use the lighter env that omits PyTorch/CUDA/spconv:
+
+```bash
+conda env create -f environment-data.yaml
+conda activate bridge-classify-data
+```
+
+| File | Env name | Use case |
+|------|----------|----------|
+| `environment.yaml` | `bridge-classify` | Full stack: training, inference, data processing. Requires NVIDIA GPU. |
+| `environment-data.yaml` | `bridge-classify-data` | Data processing only. No GPU deps. Safe for CPU-only machines. |
 
 #### Option 3: Manual Installation
 
@@ -391,7 +332,7 @@ python utils/register_model.py \
   --exp-dir ./experiments/bridge-base-all-data-v3/version_0 \
   --name bridge-base-all-data-v3 \
   --description "Silver-only training, 477K bridges, base_channels=16, 0.1m voxel" \
-  --bucket fimc-data --prefix bridge-classification/models
+  --bucket my-bucket --prefix bridge-classification/models
 ```
 
 **Register a fine-tuned model** (with parent lineage):
@@ -402,7 +343,7 @@ python utils/register_model.py \
   --name ft-gold-optA-v0 \
   --description "Fine-tuned from v3, frozen encoder, gold data" \
   --parent bridge-base-all-data-v3 \
-  --bucket fimc-data --prefix bridge-classification/models
+  --bucket my-bucket --prefix bridge-classification/models
 ```
 
 **Register evaluation results** (updates registry with metrics, changes stage to `evaluated`):
@@ -415,9 +356,9 @@ python utils/evaluate_model.py \
   --inference-dir ./evaluation_results/v3/inference_output \
   --output-dir ./evaluation_results/v3 \
   --register --model-name bridge-base-all-data-v3 \
-  --bucket bucket-name \
-  --prefix prefix-name/models \
-  --profile aws-profile
+  --bucket my-bucket \
+  --prefix bridge-classification/models \
+  --profile my-profile
 
 # With live inference (GPU):
 python utils/evaluate_model.py \
@@ -426,18 +367,18 @@ python utils/evaluate_model.py \
   --model ./experiments/.../checkpoints/best.ckpt \
   --output-dir ./evaluation_results/new-model \
   --register --model-name new-model \
-  --bucket bucket-name \
-  --prefix prefix-name/models \
-  --profile aws-profile
+  --bucket my-bucket \
+  --prefix bridge-classification/models \
+  --profile my-profile
 ```
 
 **Inspect the registry:**
 
 ```bash
-aws s3 cp s3://fimc-data/bridge-classification/models/registry.json - --profile test-se | python -m json.tool
+aws s3 cp s3://my-bucket/bridge-classification/models/registry.json - --profile my-profile | python -m json.tool
 ```
 
-**MLOps workflow:** `train` → `register_model.py` → `evaluate_model.py --register` → `promote` (future)
+**MLOps workflow:** `train` → `register_model.py` → `evaluate_model.py --register` → `promote_model.py`
 
 The registry stores model metadata (config, lineage, evaluation results) and follows a stage lifecycle: `experimental` → `evaluated` → `staging` → `production`.
 
@@ -477,7 +418,7 @@ Tests run in seconds and require only numpy + boto3 (no GPU, PDAL, or conda). CI
 - Make a folder named `data/` in the same level as `src/`
 - Make a subfolder `usgs_entwine/` and `osm/hucs/` inside `data/` folder.
 - Download the [USGS lidar resources](https://raw.githubusercontent.com/hobuinc/usgs-lidar/refs/heads/master/boundaries/resources.geojson): `wget https://raw.githubusercontent.com/hobuinc/usgs-lidar/refs/heads/master/boundaries/resources.geojson -O data/usgs_entwine/lidar_resources.geojson`
-- HUC-level OSM data: `s3://fimc-data/bridge-classification/osm/hucs/` (organized by huc_id folder level)
+- HUC-level OSM data: `s3://my-bucket/bridge-classification/osm/hucs/` (organized by huc_id folder level)
 - The pipeline creates `data/ml-data/` and its subfolders when you run Steps 1–4; see [Output directories](#output-directories) for the full layout. All paths are configurable via CLI arguments.
 
 Download and organize it to match this structure.
@@ -499,14 +440,9 @@ data/
     └── ...
 ```
 
-## Classification Labels for Training
+## Classification Labels
 
-The pipeline uses the following classification scheme:
-
-- **0**: Background/Unclassified (Piers/Pylons, Trees, Low Noise, Birds)
-- **1**: Ground/ Water (Non-Bridge Surface, River Banks, Water Surface)
-- **2**: Bridge Deck (Primary Target)
-- **3**: Obstacles (Cars, Light Poles, High Noise)
+See [Architecture — Classification Schema](docs/architecture.md#classification-schema) for the 4-class labeling scheme and ASPRS code mappings.
 
 ## Output Structure
 
@@ -609,16 +545,12 @@ The normalization script generates JSON metadata files with the following struct
 
 ### Viewing TensorBoard while training is running
 
-You can run TensorBoard in a separate terminal (same Docker image) to watch metrics live. Use `-p 6006:6006` to map the container port to the host so you can open `http://localhost:6006` in the browser. Use `--bind_all` so TensorBoard listens on all interfaces (needed when running inside Docker).
-
 ```bash
 docker compose run -p 6006:6006 --rm bridge-classifier \
-  tensorboard \
-  --logdir=experiments/bridge-base-all-data-v0/version_0/ \
-  --bind_all
+  tensorboard --logdir=experiments/<exp_name>/version_0/ --bind_all
 ```
 
-The `--logdir` path should match your experiment name and version (e.g. `experiments/<exp_name>/version_<N>/`). If you use a different `--experiments-dir` when training, use that base path for `--logdir`. TensorBoard logs are written by Lightning's TensorBoardLogger to the same directory as the CSV metrics.
+Open `http://localhost:6006`. The `--logdir` path should match your experiment name.
 
 ### CSV metrics and static plots
 
