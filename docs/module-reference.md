@@ -515,7 +515,7 @@ Splits bridge data into train/validation/test by HUC.
 | `--test-ratio`       | 0.15                                        | Test split fraction                                      |
 | `--symlink`          | False                                       | Create symlinks instead of copies                        |
 | `--seed`             | 27                                          | Random seed for reproducibility                          |
-| `--workers`          | CPU count                                   | Parallel workers for file transfer                       |
+| `--workers`          | `cpu_count`                                 | Parallel workers for file transfer                       |
 
 
 ---
@@ -644,7 +644,7 @@ Downloads OSM bridge GeoPackages by HUC from S3.
 | `--prefix`       | `hand_fim/hand_4_8_7_2/`    | Base S3 prefix                                           |
 | `--all`          | False                        | Download all HUCs (otherwise uses `--limit`)             |
 | `--limit`        | 100                          | Number of HUCs to process                                |
-| `--workers`      | CPU count                    | Number of worker processes                               |
+| `--workers`      | `min(32, cpu_count+4)`       | Number of worker processes                               |
 | `--save-subsets` | `both`                       | Which filtered subsets to save: `lidar`, `not_lidar`, or `both` |
 
 
