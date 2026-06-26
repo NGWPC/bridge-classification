@@ -74,6 +74,8 @@ flowchart TD
 
 The definitive 4-class reference. All other components must agree with this table.
 
+> Source of truth: [`src/constants.py`](../src/constants.py) defines the canonical class labels, ASPRS mappings, and inference modes.
+
 | Model Class | Name | Description | ASPRS LAS Input Codes | ASPRS LAS Output Code |
 |-------------|------|-------------|----------------------|-----------------------|
 | **0** | Background/Unclassified | Piers, pylons, trees, low noise, birds; anything not covered by classes 1–3 | 1 (Unclassified), 7 (Low Noise), all others | 1 (Unclassified) |
@@ -176,7 +178,7 @@ These offsets allow reconstructing absolute coordinates from normalized data if 
 ### Strategy
 
 - All bridges within a HUC go to the **same split** (prevents spatial leakage between nearby bridges)
-- Default ratios: 80% train / 20% validation (configurable via `--train-ratio`, `--val-ratio`)
+- Default ratios: 70% train / 15% validation / 15% test (configurable via `--train-ratio`, `--val-ratio`, `--test-ratio`)
 - **Holdout test set**: Fixed bridge IDs from a file (`--holdout-test-ids`) are reserved for testing regardless of the split ratios
 - **Symlink mode** (`--symlink`): Creates symlinks instead of copies, saving disk space for large datasets
 
@@ -287,3 +289,7 @@ Two `SubMConv3d` layers (maintains sparsity pattern) with a shortcut connection 
 9. Map back to original points via `unique_inverse_indices`
 10. Map model classes → ASPRS codes via `MODEL_TO_LAS_MAP`
 11. Write classified LAZ via PDAL (preserves all original fields)
+
+---
+
+For deployment and scaling, see [AWS Batch Inference](aws-batch-inference.md).

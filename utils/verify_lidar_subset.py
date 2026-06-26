@@ -6,7 +6,7 @@ Works with local data (--dir) or S3 (--s3). Randomly samples HUCs for spot-check
 
 Usage:
     python utils/verify_lidar_subset.py --dir ./data/osm/hucs --sample 10
-    python utils/verify_lidar_subset.py --s3 --profile Data --sample 20 --bucket fimc-data --prefix bridge-classification/osm/hucs/
+    python utils/verify_lidar_subset.py --s3 --profile my-profile --sample 20 --bucket my-bucket --prefix bridge-classification/osm/hucs/
 """
 
 from __future__ import annotations
