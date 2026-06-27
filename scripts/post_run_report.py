@@ -1,7 +1,7 @@
 """
 Bridge Classification — Post-Run Report
 
-Generates a comprehensive report after an AWS Batch inference run completes.
+Generates a report after an AWS Batch inference run completes.
 Reads _run_config.json (saved at submission), audits S3 outputs, queries
 CloudWatch logs for per-child summaries and per-bridge timing, and saves
 _run_report.json to the output prefix.

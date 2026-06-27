@@ -52,7 +52,7 @@ MODEL_TO_LAS_MAP = {
 # 3: Obstacles (Cars, Poles, High Noise)
 LAS_TO_MODEL_MAP = {
     2: 1,    # Ground -> 1
-    9: 1,    # Water -> 1
+    9: 1,    # Water -> 1 (gold data only; SMRF overwrites 9 in silver)
     17: 2,   # Bridge Deck -> 2
     18: 3,   # High Noise -> 3
 }

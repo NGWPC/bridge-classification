@@ -1,6 +1,6 @@
 # Data Pipeline Walkthrough
 
-This document traces a single bridge from OSM geometry to a classified output file, showing exact data shapes and transformations at each stage. All directory paths shown below are configurable defaults — pass `--source-dir`, `--silver-dir`, etc. to override. See [Module Reference](module-reference.md) for all CLI arguments.
+This document traces a single bridge from OSM geometry to a classified output file, showing data shapes and transformations at each stage. All directory paths shown below are configurable defaults — pass `--source-dir`, `--silver-dir`, etc. to override. See [Module Reference](module-reference.md) for all CLI arguments.
 
 ---
 
@@ -38,11 +38,13 @@ OSM bridge geometry (LineString)
 | File | Location | Contents |
 |------|----------|----------|
 | Source LAZ | `data/ml-data/source/{huc_id}/bridge_{osmid}_{source}.laz` | Raw downloaded point cloud, ASPRS original labels |
-| Silver LAZ | `data/ml-data/silver_training/{huc_id}/bridge_{osmid}_{source}.laz` | Weak-supervised labels (ASPRS 17 = deck, 18 = obstacles) |
+| Silver LAZ | `data/ml-data/silver_training/{huc_id}/bridge_{osmid}_{source}.laz` | Weak-supervised labels (5 ASPRS classes — see note below) |
+
+**Silver LAZ classes**: SMRF ground (2), SMRF non-ground/unclassified (1), bridge deck (17, Z-distance Rule A), obstacles (18, Z-distance Rule B), and preserved noise (7). SMRF runs with default `only_ground=false`, so original ASPRS classes (e.g. water 9) are overwritten to ground or unclassified before the bridge/obstacle rules run.
 
 **Data format**: PDAL structured array — fields include `X`, `Y`, `Z`, `Intensity`, `Classification`, `ReturnNumber`, `NumberOfReturns`, `GpsTime`, etc.
 
-**Rejection**: Bridges failing RMSE > 0.30 m or linearity deviation > 0.35 m are skipped (no silver LAZ produced). Curved/arched bridges are excluded by design.
+**Rejection**: Bridges failing RMSE > 0.30 m or linearity deviation > 0.35 m are skipped (no silver LAZ produced). See [Architecture - BridgeProcessingConfig](architecture.md#configuration-bridgeprocessingconfig-in-srcweak_supervisionpy) for all thresholds. Curved/arched bridges are excluded by design.
 
 ---
 
@@ -90,6 +92,7 @@ I_norm = Intensity / max(Intensity)  # 0-1 range
 ```json
 {
   "original_file": "bridge_5069009_USGS_LPC_PA_...laz",
+  "original_path": "/data/ml-data/silver_training/02050206/bridge_5069009_USGS_LPC_PA_...laz",
   "offsets": {
     "x_center": -8548539.41,
     "y_center": 4995360.81,
@@ -114,12 +117,11 @@ I_norm = Intensity / max(Intensity)  # 0-1 range
 
 ```
 silver_training_normalized/{huc_id}/*.npy + *.json
-  → group bridges by HUC
-  → stratified random split (seed=27)
+  → split each HUC's bridges at configured ratios (seed=27)
   → symlinks into training/ validation/ testing/
 ```
 
-**Strategy**: All bridges within a single HUC land in the same split — preventing spatial data leakage between nearby bridges.
+**Strategy**: Each HUC's bridges are split independently at the configured ratios (70/15/15 default), ensuring geographic diversity across all splits. Individual bridges never appear in more than one split.
 
 **Outputs**:
 
@@ -243,8 +245,8 @@ Raw LAZ (unprocessed)
 Finding new bridges to send for human annotation:
 
 1. **Discover candidates**: Run `python utils/find_new_source_candidates.py --proven-linear false --sample-size 0` to find all bridge+source combinations not already in train/val/test splits.
-2. **Run weak supervision**: Process candidates through `src/download_and_weak_supervise_hucs.py` using the output HUC/OSM ID lists. The pipeline automatically rejects complex/curved bridges via the RANSAC linearity check.
-3. **Extract successes**: Use `archive/scripts/extract_successful_bridges.py` to parse pipeline logs and identify bridges that passed QC.
+2. **Run weak supervision**: Process candidates through `src/download_and_weak_supervise_hucs.py` using the output HUC/OSM ID lists. The pipeline automatically rejects complex/curved bridges via the RANSAC linearity check. Use `--results-csv` to save per-bridge results.
+3. **Identify successes**: Filter the results CSV for `success=True`, or list new `.laz` files in <silver-dir> arg folder of download_and_weak_supervise_hucs.py.
 4. **Select final set**: Choose 1 bridge per HUC (for geographic diversity) and push silver `.laz` files to S3 `testing/` for annotators.
 5. **Merge annotations**: After annotation returns, merge corrected files into `gold-data/`, re-normalize with `preprocess_bridges.py`, and re-split with `split_data.py`.
 

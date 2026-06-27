@@ -749,6 +749,31 @@ class BridgeProcessor:
             if len(errors) > 10:
                 print(f"  ... and {len(errors) - 10} more errors (see log file for complete list)")
 
+        return results
+
+
+def _write_results_csv(results: list, csv_path: str) -> None:
+    """Write per-bridge results to CSV."""
+    import csv as csv_mod
+    fieldnames = ['huc_id', 'osm_id', 'source_name', 'success', 'skipped', 'rmse', 'deviation', 'error']
+    path = Path(csv_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, 'w', newline='') as f:
+        writer = csv_mod.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for r in results:
+            writer.writerow({
+                'huc_id': r.get('huc_id', ''),
+                'osm_id': r.get('osmid', ''),
+                'source_name': r.get('source_name', ''),
+                'success': r.get('success', False),
+                'skipped': r.get('skipped', False),
+                'rmse': f"{r['rmse']:.3f}" if r.get('rmse') is not None else '',
+                'deviation': f"{r['deviation']:.3f}" if r.get('deviation') is not None else '',
+                'error': r.get('error', ''),
+            })
+    print(f"Results written to {path} ({len(results)} rows)")
+
 
 def main() -> None:
     """Main entry point with command-line argument parsing."""
@@ -826,6 +851,12 @@ def main() -> None:
     )
 
     parser.add_argument(
+        '--results-csv',
+        default=None,
+        help='Write per-bridge results (huc_id, osm_id, source, success, rmse, deviation, error) to this CSV path'
+    )
+
+    parser.add_argument(
         '--log-dir',
         default='./logs',
         help='Directory for log files (default: ./logs)'
@@ -858,12 +889,15 @@ def main() -> None:
     )
 
     # Process
-    processor.process(
+    results = processor.process(
         huc_ids=args.hucs,
         osm_ids=args.osm_ids,
         show_progress=not args.no_progress,
         shuffle_seed=args.shuffle_seed
     )
+
+    if args.results_csv and results:
+        _write_results_csv(results, args.results_csv)
 
 
 if __name__ == "__main__":

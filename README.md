@@ -1,6 +1,6 @@
 # USGS Lidar Bridge Classification
 
-A comprehensive pipeline for processing bridge lidar data organized by Hydrologic Unit Code (HUC) regions. This project downloads lidar point cloud data, applies weak supervision rules for labeling, normalizes coordinates, and prepares data for machine learning. It includes **model training** (sparse 3D U-Net) and **inference** for bridge point cloud classification with multiple output modes (masked, raw, or both); **scaling with AWS Batch** for parallel inference on SPOT instances is [supported](docs/aws-batch-inference.md).
+An end-to-end pipeline for processing bridge lidar data organized by Hydrologic Unit Code (HUC) regions. This project downloads lidar point cloud data, applies weak supervision rules for labeling, normalizes coordinates, and prepares data for machine learning. It includes **model training** (sparse 3D U-Net) and **inference** for bridge point cloud classification with multiple output modes (masked, raw, or both); **scaling with AWS Batch** for parallel inference on SPOT instances is [supported](docs/aws-batch-inference.md).
 
 ## Table of Contents
 
@@ -45,7 +45,7 @@ mkdocs gh-deploy
 
 ## Pipeline Overview
 
-Data flows from OSM bridge geometries and USGS LiDAR sources through download and weak supervision, then normalization, train/val/test split, optional class-weight computation, and finally model training. The pipeline is designed to scale to hundreds of thousands of bridges; ensure sufficient disk space for silver_training and normalized outputs.
+Data flows from OSM bridge geometries and USGS LiDAR sources through download and weak supervision, then normalization, train/val/test split, optional class-weight computation, and finally model training. The pipeline scales to hundreds of thousands of bridges; ensure sufficient disk space for silver_training and normalized outputs.
 
 ```mermaid
 flowchart LR;
@@ -250,7 +250,7 @@ See [Troubleshooting](#troubleshooting) for permission and other issues.
 
 #### Option 2: Local Conda Install
 
-If you prefer to run locally without Docker, this project includes an `environment.yaml` file that handles all dependencies, including geospatial libraries and CUDA-accelerated ML tools.
+For local installs without Docker, `environment.yaml` handles all dependencies (geospatial and CUDA).
 
 ```bash
 # 1. Create the environment from file

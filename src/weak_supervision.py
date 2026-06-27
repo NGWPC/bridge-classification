@@ -84,7 +84,7 @@ class BridgeProcessingConfig:
     max_rmse: float = 0.30
 
     # Classification Rules
-    ignore_classes: Optional[List[int]] = None  # Will default to [7, 9, 18]
+    ignore_classes: Optional[List[int]] = None  # Default [7, 9, 18]. In process_bridge(), only 7 is effective post-SMRF; all three active in fit_ransac_from_arrays().
     bridge_deck_class: int = 17
     high_noise_class: int = 18
     deck_z_max: float = 0.20
@@ -541,7 +541,6 @@ def process_bridge(
         # Rule A: Bridge Deck (Class 17) = Points within the hull that are close to the plane (Z distance)
         deck_z_mask = (dist_from_plane_all <= config.deck_z_max) & (dist_from_plane_all >= config.deck_z_min)
         final_deck_mask = deck_z_mask & lateral_mask
-        # Overwrite SMRF errors (Ground->Bridge) inside the Hull
         new_classes[final_deck_mask] = config.bridge_deck_class
 
         # Rule B: High Noise / Obstacles (Class 18) = Points within the hull that are far above the plane (Z distance)

@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**What**: Automated classification of 3D LiDAR point clouds around bridges into 4 semantic classes.
+**What**: Automated classification of 3D LiDAR point clouds around bridges into [4 semantic classes](#classification-schema).
 
 **Who**: Built for the NOAA Office of Water Prediction (OWP) to support the National Bridge Inventory. Bridges are a critical factor in flood inundation modeling — knowing which points are the deck enables accurate hydraulic analysis and better heal DEM for Flood Inundation Mapping (FIM) purpose.
 
@@ -34,7 +34,7 @@ flowchart TD
     B1[ASPRS → Model Class Remap]
     B2[Coordinate Normalization<br/>XY center, Z floor]
     B3[Intensity Normalization<br/>0-1 range]
-    B4[Output: .npy N×5 + .json metadata]
+    B4[Output: .npy N×5 x,y,z,intensity,label + .json metadata]
     B1 --> B2 --> B3 --> B4
   end
 
@@ -95,7 +95,7 @@ The definitive 4-class reference. All other components must agree with this tabl
 
 **Script**: `src/download_and_weak_supervise_hucs.py` | **Algorithm module**: `src/weak_supervision.py`
 
-The weak supervision pipeline generates labeled training data automatically, avoiding the need for manual annotation at scale.
+The weak supervision pipeline generates labeled training data without manual annotation.
 
 ### Algorithm
 
@@ -105,7 +105,7 @@ The weak supervision pipeline generates labeled training data automatically, avo
 3. **Ground Filtering**: SMRF (Simple Morphological Filter) assigns preliminary ground/non-ground labels
    - `scalar=1.25, slope=0.05, threshold=0.5, window=10.0`
    - Ignores existing noise labels (ASPRS 7)
-4. **Deterministic Ordering**: Points sorted `np.lexsort((Z, Y, X))` then shuffled with `seed=27`
+4. **Deterministic Ordering**: Points sorted `np.lexsort((Z, Y, X))` then shuffled with `seed=27` (configurable via `BridgeProcessingConfig.deterministic_ordering_seed`)
    - Required because EPT chunk order is non-deterministic and OS-dependent
 5. **RANSAC Plane Fitting**: Fits a plane to the bridge deck
    - `min_samples=10, residual_threshold=0.20 m, random_state=27`
@@ -120,7 +120,7 @@ The weak supervision pipeline generates labeled training data automatically, avo
 
 ### Configuration: `BridgeProcessingConfig` (in `src/weak_supervision.py`)
 
-All parameters are centralised in the `BridgeProcessingConfig` dataclass. Key fields:
+All parameters live in the `BridgeProcessingConfig` dataclass. Key fields:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -159,6 +159,8 @@ Converts weak-supervised LAZ files to normalized NumPy arrays for training.
 
 ```json
 {
+  "original_file": "bridge_5069009_USGS_LPC_PA_...laz",
+  "original_path": "/data/ml-data/silver_training/02050206/bridge_5069009_USGS_LPC_PA_...laz",
   "offsets": {
     "x_center": -8548539.41,
     "y_center": 4995360.81,
@@ -167,7 +169,7 @@ Converts weak-supervised LAZ files to normalized NumPy arrays for training.
 }
 ```
 
-These offsets allow reconstructing absolute coordinates from normalized data if needed.
+These offsets allow reconstructing absolute coordinates: `X_abs = X_norm + x_center`, `Y_abs = Y_norm + y_center`, `Z_abs = Z_norm + z_min`.
 
 ---
 
@@ -177,14 +179,14 @@ These offsets allow reconstructing absolute coordinates from normalized data if 
 
 ### Strategy
 
-- All bridges within a HUC go to the **same split** (prevents spatial leakage between nearby bridges)
+- Each HUC8's bridges are split independently at the configured ratios, ensuring geographic diversity across all splits
 - Default ratios: 70% train / 15% validation / 15% test (configurable via `--train-ratio`, `--val-ratio`, `--test-ratio`)
 - **Holdout test set**: Fixed bridge IDs from a file (`--holdout-test-ids`) are reserved for testing regardless of the split ratios
 - **Symlink mode** (`--symlink`): Creates symlinks instead of copies, saving disk space for large datasets
 
 ### Outputs
 
-- `training/`, `validation/`, `testing/` — HUC-organized directories with `.npy` + `.json` files
+- `training/`, `validation/`, `testing/` - HUC-organized directories with `.npy` + `.json` files
 - `split_manifest.json`, `split_{train,val,test}_ids.txt` — manifest files for reproducibility
 
 ### Class Weights (`utils/calculate_weights.py`)
@@ -212,22 +214,27 @@ Input: SparseConvTensor (N_voxels × 1 intensity channel)
 │
 ├── ENCODER
 │   ├── Input Block: SubMConv3d(1 → 16) + BN + ReLU
-│   ├── Enc1: ResidualBlock(16 → 16)                    ← skip e1
-│   ├── Down1: SparseConv3d(16 → 32, stride=2)
-│   ├── Enc2: ResidualBlock(32 → 32)                    ← skip e2
-│   ├── Down2: SparseConv3d(32 → 64, stride=2)
-│   ├── Enc3: ResidualBlock(64 → 64)                    ← skip e3
-│   ├── Down3: SparseConv3d(64 → 128, stride=2)
-│   └── Bottleneck: ResidualBlock(128 → 128)
-│
-└── DECODER
-    ├── Up3: SparseInverseConv3d(128 → 64) + cat(e3) → ResidualBlock(128 → 64)
-    ├── Up2: SparseInverseConv3d(64 → 32)  + cat(e2) → ResidualBlock(64 → 32)
-    ├── Up1: SparseInverseConv3d(32 → 16)  + cat(e1) → ResidualBlock(32 → 16)
+│   ├── Enc1: ResidualBlock(16 → 16)                    ─── skip e1 ──┐
+│   ├── Down1: SparseConv3d(16 → 32, stride=2)                        │
+│   ├── Enc2: ResidualBlock(32 → 32)                    ─── skip e2 ──┤
+│   ├── Down2: SparseConv3d(32 → 64, stride=2)                        │
+│   ├── Enc3: ResidualBlock(64 → 64)                    ─── skip e3 ──┤
+│   ├── Down3: SparseConv3d(64 → 128, stride=2)                       │
+│   └── Bottleneck: ResidualBlock(128 → 128)                          │
+│                                                                     │
+└── DECODER                                                           │
+    ├── Up3: SparseInverseConv3d(128 → 64) + cat(e3) ─────────────────┤
+    │   └── Dec3: ResidualBlock(128 → 64)                             │
+    ├── Up2: SparseInverseConv3d(64 → 32)  + cat(e2) ─────────────────┤
+    │   └── Dec2: ResidualBlock(64 → 32)                              │
+    ├── Up1: SparseInverseConv3d(32 → 16)  + cat(e1) ─────────────────┘
+    │   └── Dec1: ResidualBlock(32 → 16)
     └── Head: SubMConv3d(16 → 4)
 
 Output: (N_voxels, 4) logits
 ```
+
+Channels: `1 → 16 → 32 → 64 → 128 → 64 → 32 → 16 → 4`. Skip connections concatenate encoder features with upsampled decoder features, doubling channels before each decoder ResidualBlock.
 
 ### `ResidualBlock`
 
