@@ -6,7 +6,7 @@ USGS LiDAR Bridge Point Cloud Classification Pipeline
 
 ## Overview
 
-A comprehensive pipeline for classifying 3D LiDAR point clouds around bridges from
+An end-to-end pipeline for classifying 3D LiDAR point clouds around bridges from
 USGS 3DEP data into 4 semantic classes using a sparse 3D U-Net. The pipeline covers
 data acquisition through inference, with automated weak supervision for scalable
 training data generation (550K+ bridges).

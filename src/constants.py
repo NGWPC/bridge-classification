@@ -1,4 +1,4 @@
-"""Bridge Classification — shared constants and lightweight utilities.
+"""Bridge Classification - shared constants and lightweight utilities.
 
 This module has NO heavy dependencies (no torch, spconv, pdal, numpy) so it
 can be safely imported anywhere, including environments without a GPU.
@@ -23,10 +23,10 @@ CLASS_COLORS = {
 
 # High-contrast hex palette for publication-quality visualizations
 CLASS_COLORS_HEX = {
-    0: "#718096",   # Background  — neutral gray
-    1: "#dd6b20",   # Ground/Water — warm orange
-    2: "#3182ce",   # Bridge Deck  — strong blue
-    3: "#c0392b",   # Obstacles    — red
+    0: "#718096",   # Background  - neutral gray
+    1: "#dd6b20",   # Ground/Water - warm orange
+    2: "#3182ce",   # Bridge Deck  - strong blue
+    3: "#c0392b",   # Obstacles    - red
 }
 
 # --- ASPRS <-> Model class codes ---
@@ -52,7 +52,7 @@ MODEL_TO_LAS_MAP = {
 # 3: Obstacles (Cars, Poles, High Noise)
 LAS_TO_MODEL_MAP = {
     2: 1,    # Ground -> 1
-    9: 1,    # Water -> 1
+    9: 1,    # Water -> 1 (gold data only; SMRF overwrites 9 in silver)
     17: 2,   # Bridge Deck -> 2
     18: 3,   # High Noise -> 3
 }
@@ -70,7 +70,7 @@ BRIDGE_TIMEOUT = 150
 AWS_MAX_RETRIES = 3
 
 
-# --- Typed contracts (lightweight enums — no heavy deps) ---
+# --- Typed contracts (lightweight enums - no heavy deps) ---
 from enum import Enum
 
 
@@ -88,7 +88,7 @@ class InferenceMode(Enum):
     BOTH = "both"
 
 
-# --- Timeout machinery (lightweight — no spconv/torch dependency) ---
+# --- Timeout machinery (lightweight - no spconv/torch dependency) ---
 import signal
 from contextlib import contextmanager
 from typing import Any, Iterator
@@ -110,7 +110,7 @@ def bridge_timeout_guard(seconds: float) -> Iterator[None]:
     Note: SIGALRM is delivered but the Python handler only fires when the
     bytecode eval loop runs. This CANNOT interrupt blocking C extensions
     (e.g. PDAL network reads). For C-blocking code, use subprocess-based
-    timeout with Process.terminate() instead — see
+    timeout with Process.terminate() instead - see
     ``_run_bridge_in_subprocess`` in ``download_and_weak_supervise_hucs.py``.
 
     Usage:
