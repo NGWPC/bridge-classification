@@ -1,7 +1,7 @@
 """
 HUC-based Bridge Processing Pipeline
 
-A comprehensive pipeline for processing bridge lidar data organized by Hydrologic
+Pipeline for processing bridge lidar data organized by Hydrologic
 Unit Code (HUC) regions. This script finds intersecting lidar sources, applies
 ground filtering and weak supervision rules to generate labeled training data for
 machine learning models.
@@ -293,7 +293,7 @@ def _bridge_subprocess_target(
     """Run process_bridge in a child process and put the result on the queue.
 
     Deserializes WKT geometry and config dict, then calls process_bridge.
-    Called as the target of multiprocessing.Process — never called directly.
+    Called as the target of multiprocessing.Process - never called directly.
     """
     from shapely import wkt
     config = BridgeProcessingConfig.from_dict(config_dict)
@@ -319,12 +319,12 @@ def _run_bridge_in_subprocess(
     spawns a short-lived child for one bridge. The Pool provides parallelism
     (N bridges at once); this subprocess provides killability (SIGTERM can
     terminate PDAL's C code, which SIGALRM cannot). The Pool worker always
-    recovers via ``p.join(timeout)`` — its slot is never lost to a hang.
+    recovers via ``p.join(timeout)`` - its slot is never lost to a hang.
 
     Args:
         source_url: EPT URL for the lidar source.
         geometry_wkt: WKT string of the bridge geometry (passed through
-            from the task tuple — avoids re-serializing a Shapely object).
+            from the task tuple - avoids re-serializing a Shapely object).
         config: BridgeProcessingConfig with all parameters.
         buffer_meters: Buffer size in meters.
         timeout: Wall-clock seconds before the subprocess is killed.

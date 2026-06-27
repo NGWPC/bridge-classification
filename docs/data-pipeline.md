@@ -1,6 +1,6 @@
 # Data Pipeline Walkthrough
 
-This document traces a single bridge from OSM geometry to a classified output file, showing data shapes and transformations at each stage. All directory paths shown below are configurable defaults — pass `--source-dir`, `--silver-dir`, etc. to override. See [Module Reference](module-reference.md) for all CLI arguments.
+This document traces a single bridge from OSM geometry to a classified output file, showing data shapes and transformations at each stage. All directory paths shown below are configurable defaults - pass `--source-dir`, `--silver-dir`, etc. to override. See [Module Reference](module-reference.md) for all CLI arguments.
 
 ---
 
@@ -19,7 +19,7 @@ The pipeline projects all geometries to **EPSG:3857** (Web Mercator) for metric 
 
 ## Step 1: Download & Weak Supervise
 
-**Script**: `src/download_and_weak_supervise_hucs.py`
+**Script**: `src/download_and_weak_supervise_hucs.py` | **Algorithm**: [Architecture - Weak Supervision](architecture.md#phase-a-silver-data-generation-weak-supervision)
 
 ```
 OSM bridge geometry (LineString)
@@ -38,19 +38,21 @@ OSM bridge geometry (LineString)
 | File | Location | Contents |
 |------|----------|----------|
 | Source LAZ | `data/ml-data/source/{huc_id}/bridge_{osmid}_{source}.laz` | Raw downloaded point cloud, ASPRS original labels |
-| Silver LAZ | `data/ml-data/silver_training/{huc_id}/bridge_{osmid}_{source}.laz` | Weak-supervised labels (5 ASPRS classes — see note below) |
+| Silver LAZ | `data/ml-data/silver_training/{huc_id}/bridge_{osmid}_{source}.laz` | Weak-supervised labels (5 ASPRS classes - see note below) |
 
-**Silver LAZ classes**: SMRF ground (2), SMRF non-ground/unclassified (1), bridge deck (17, Z-distance Rule A), obstacles (18, Z-distance Rule B), and preserved noise (7). SMRF runs with default `only_ground=false`, so original ASPRS classes (e.g. water 9) are overwritten to ground or unclassified before the bridge/obstacle rules run.
+**Silver LAZ classes**: ground (2), unclassified (1), bridge deck (17), obstacles (18), noise (7).\
+See [Architecture - Weak Supervision](architecture.md#phase-a-silver-data-generation-weak-supervision) for SMRF behavior and classification rules.
 
-**Data format**: PDAL structured array — fields include `X`, `Y`, `Z`, `Intensity`, `Classification`, `ReturnNumber`, `NumberOfReturns`, `GpsTime`, etc.
+**Data format**: PDAL structured array - fields include `X`, `Y`, `Z`, `Intensity`, `Classification`, `ReturnNumber`, `NumberOfReturns`, `GpsTime`, etc.
 
-**Rejection**: Bridges failing RMSE > 0.30 m or linearity deviation > 0.35 m are skipped (no silver LAZ produced). See [Architecture - BridgeProcessingConfig](architecture.md#configuration-bridgeprocessingconfig-in-srcweak_supervisionpy) for all thresholds. Curved/arched bridges are excluded by design.
+**Rejection**: Bridges failing QC are skipped (no silver LAZ produced).\
+See [Architecture - BridgeProcessingConfig](architecture.md#configuration-bridgeprocessingconfig-in-srcweak_supervisionpy) for thresholds.
 
 ---
 
 ## Step 2: Preprocess & Normalize
 
-**Script**: `src/preprocess_bridges.py`
+**Script**: `src/preprocess_bridges.py` | **Schema**: [Architecture - Classification Schema](architecture.md#classification-schema)
 
 ```
 Silver LAZ
@@ -85,7 +87,7 @@ I_norm = Intensity / max(Intensity)  # 0-1 range
 | File | Shape | dtype | Columns |
 |------|-------|-------|---------|
 | `.npy` | (N, 5) | float32 | `[x_centered, y_centered, z_floored, intensity_norm, model_label]` |
-| `.json` | — | — | Offsets, point count, class distribution |
+| `.json` | - | - | Offsets, point count, class distribution |
 
 **Example `.json` metadata:**
 
@@ -121,7 +123,9 @@ silver_training_normalized/{huc_id}/*.npy + *.json
   → symlinks into training/ validation/ testing/
 ```
 
-**Strategy**: Each HUC's bridges are split independently at the configured ratios (70/15/15 default), ensuring geographic diversity across all splits. Individual bridges never appear in more than one split.
+**Strategy**: Per-HUC bridge-level splitting at 70/15/15 (configurable).\
+See [Architecture - Data Splitting](architecture.md#phase-c-data-splitting) for rationale and [Decision #3](decisions.md#3-per-huc-data-organization) for design context.\
+The current test split is the holdout set (`holdout_test.txt`, 180 bridges); `--holdout-test-ids` reserves these regardless of split ratios.
 
 **Outputs**:
 
@@ -138,28 +142,14 @@ data/ml-data/
 
 ### Step 3a: Class Weights
 
-**Script**: `utils/calculate_weights.py`
-
-```
-training/**/*.json
-  → aggregate class_distribution counts
-  → W_c = Total / (4 × Count_c)
-  → class_weights.json
-```
-
-**Output**: `data/ml-data/class_weights.json`
-
-```json
-{"weights": [6.22, 1.49, 0.36, 2.34]}
-```
-
-Higher weight = rarer class (Background is rare near bridges; Deck is common).
+**Script**: `utils/calculate_weights.py` - produces `data/ml-data/class_weights.json`.\
+See [Architecture - Class Weights](architecture.md#class-weights-utilscalculate_weightspy) for formula and interpretation.
 
 ---
 
 ## Step 4: Training
 
-**Script**: `src/train.py` | **Data loading**: `src/dataset.py`
+**Script**: `src/train.py` | **Data loading**: `src/dataset.py` | **Model**: [Architecture - Model](architecture.md#phase-d-model-architecture) | **Config**: [Architecture - Training](architecture.md#training-configuration)
 
 ```
 training/**/*.npy
@@ -168,8 +158,8 @@ training/**/*.npy
     → shift xyz min to 0
     → [optional augmentation]
     → quantize: floor(xyz / voxel_size) → int32 coords
-    → voxelize: mean intensity + majority-vote labels
-    → [optional max_voxels subsample]
+    → voxelize: mean intensity + majority-vote labels (see [Decision #5](decisions.md#5-voxel-level-majority-vote-for-labels))
+    → [optional max_voxels subsample] (see [Decision #6](decisions.md#6-max_voxels-cap-for-oom-prevention))
   → sparse_collate_fn (src/dataset.py)
     → prepend batch_id → [batch_id, x, y, z]
   → SparseConvTensor
@@ -186,7 +176,7 @@ training/**/*.npy
 | `discrete_coords` | (N, 3) | int32 | Quantized voxel grid indices |
 | After voxel aggregation | (M, 3) coords + (M, 1) features + (M,) labels | int32 / float32 / int64 | M << N (typically 10–50× compression) |
 | After collate (batch of B) | (ΣM, 4) coords + (ΣM, 1) features + (ΣM,) labels | int32 / float32 / int64 | First col = batch_id |
-| `SparseConvTensor` input | (ΣM, 1) features + (ΣM, 4) indices | — | SpConv internal format |
+| `SparseConvTensor` input | (ΣM, 1) features + (ΣM, 4) indices | - | SpConv internal format |
 | Model output | (ΣM, 4) | float32 | Per-voxel logits for 4 classes |
 | After `argmax` | (ΣM,) | int64 | Predicted class per voxel |
 
@@ -196,7 +186,7 @@ training/**/*.npy
 
 ## Step 5: Inference
 
-**Script**: `src/inference.py`
+**Script**: `src/inference.py` | **Output mapping**: [Architecture - Classification Schema](architecture.md#classification-schema)
 
 ```
 Raw LAZ (unprocessed)
@@ -216,7 +206,7 @@ Raw LAZ (unprocessed)
   → PDAL writers.las (classified LAZ)
 ```
 
-**Output**: `{bridge_stem}_predicted.laz` — same structure as input, with `Classification` field updated to ASPRS codes.
+**Output**: `{bridge_stem}_predicted.laz` - same structure as input, with `Classification` field updated to ASPRS codes.
 
 ---
 
@@ -226,8 +216,8 @@ Raw LAZ (unprocessed)
 |------|-------------|-------|-------|-------------|
 | Step 1 output | Silver LAZ | Structured array, N rows | mixed | ASPRS-labeled point cloud |
 | Step 2 output | `.npy` | (N, 5) | float32 | Normalized [x, y, z, intensity, label] |
-| Step 2 output | `.json` | — | — | Offsets + class distribution |
-| Step 3 output | Symlinks | — | — | Organized into train/val/test dirs |
+| Step 2 output | `.json` | - | - | Offsets + class distribution |
+| Step 3 output | Symlinks | - | - | Organized into train/val/test dirs |
 | Step 3a output | `class_weights.json` | [4] | float | Inverse-frequency weights |
 | Step 4 – voxel coords | `discrete_coords` | (M, 3) | int32 | 10 cm grid indices (0.1 m default) |
 | Step 4 – voxel features | `aggregated_features` | (M, 1) | float32 | Mean intensity per voxel |
@@ -244,7 +234,7 @@ Raw LAZ (unprocessed)
 
 Finding new bridges to send for human annotation:
 
-1. **Discover candidates**: Run `python utils/find_new_source_candidates.py --proven-linear false --sample-size 0` to find all bridge+source combinations not already in train/val/test splits.
+1. **Discover candidates**: Run `python utils/find_new_source_candidates.py --proven-linear false --sample-size 0` (see `--help` for required path arguments) to find all bridge+source combinations not already in train/val/test splits.
 2. **Run weak supervision**: Process candidates through `src/download_and_weak_supervise_hucs.py` using the output HUC/OSM ID lists. The pipeline automatically rejects complex/curved bridges via the RANSAC linearity check. Use `--results-csv` to save per-bridge results.
 3. **Identify successes**: Filter the results CSV for `success=True`, or list new `.laz` files in <silver-dir> arg folder of download_and_weak_supervise_hucs.py.
 4. **Select final set**: Choose 1 bridge per HUC (for geographic diversity) and push silver `.laz` files to S3 `testing/` for annotators.

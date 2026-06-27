@@ -23,7 +23,7 @@ class FailureReason(Enum):
     """Why a bridge failed weak supervision.
 
     Most values are set by process_bridge() itself. TIMEOUT is set by the
-    caller's subprocess wrapper — included here so the consumer can dispatch
+    caller's subprocess wrapper - included here so the consumer can dispatch
     on all failure reasons with a single enum.
     """
     NO_POINTS = "no_points"

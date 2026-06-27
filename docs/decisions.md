@@ -26,7 +26,7 @@ Log of non-obvious architectural choices and the reasoning behind them.
 
 **Reasoning**: There are 550K+ bridges in the continental US. Human labeling at that scale is infeasible (would take years). RANSAC reliably identifies flat bridge deck planes from LiDAR data, and Z-distance thresholds from the fitted plane cleanly separate the deck from above-deck obstacles and below-deck structure. Quality gates (RMSE < 0.30 m, linearity check) reject bad fits before they produce mislabeled training data.
 
-**Trade-off**: Silver labels are noisier than gold human labels. Arched, curved, and structurally complex bridges are rejected by the linearity check — the pipeline skips these rather than producing bad training data. Estimated label accuracy on accepted bridges is high (deck region is tightly bounded by the RANSAC plane).
+**Trade-off**: Silver labels are noisier than gold human labels. Arched, curved, and structurally complex bridges are rejected by the linearity check - the pipeline skips these rather than producing bad training data. Estimated label accuracy on accepted bridges is high (deck region is tightly bounded by the RANSAC plane).
 
 ---
 
@@ -60,7 +60,7 @@ Log of non-obvious architectural choices and the reasoning behind them.
 
 Mean aggregation is used for the intensity feature (continuous value), which is appropriate.
 
-**Source**: `src/voxelization.py` — `voxelize` function
+**Source**: `src/voxelization.py` - `voxelize` function
 
 ---
 
@@ -72,7 +72,7 @@ Mean aggregation is used for the intensity feature (continuous value), which is 
 
 Additionally, the training loop catches `torch.cuda.OutOfMemoryError` per batch, clears the cache, and continues - providing a second layer of defense for the rare case where a batch still exceeds memory.
 
-**Source**: `src/dataset.py` — `BridgeDataset.__getitem__` (subsample), `src/train.py` — `BridgeLightningModule._common_step` (OOM handler)
+**Source**: `src/dataset.py` - `BridgeDataset.__getitem__` (subsample), `src/train.py` - `BridgeLightningModule._common_step` (OOM handler)
 
 ---
 
@@ -80,11 +80,11 @@ Additionally, the training loop catches `torch.cuda.OutOfMemoryError` per batch,
 
 **Choice**: Input to the model is 1 channel (intensity). XYZ spatial information is encoded implicitly via the voxel grid structure.
 
-**Reasoning**: In a sparse convolution framework, the voxel grid coordinates *are* the spatial information — SpConv's convolutions operate on the spatial layout of active voxels. Explicitly passing XYZ as input features would be redundant and would require the network to learn to separate the role of "where am I" (already encoded in the grid) from "what am I" (what the feature channel should answer).
+**Reasoning**: In a sparse convolution framework, the voxel grid coordinates *are* the spatial information - SpConv's convolutions operate on the spatial layout of active voxels. Explicitly passing XYZ as input features would be redundant and would require the network to learn to separate the role of "where am I" (already encoded in the grid) from "what am I" (what the feature channel should answer).
 
-Intensity encodes surface reflectance — useful for material discrimination (asphalt bridge deck vs. water vs. vegetation vs. metal guard rails). It is the only physically meaningful per-point scalar available consistently across USGS 3DEP datasets.
+Intensity encodes surface reflectance - useful for material discrimination (asphalt bridge deck vs. water vs. vegetation vs. metal guard rails). It is the only physically meaningful per-point scalar available consistently across USGS 3DEP datasets.
 
-**Source**: `src/dataset.py` — `BridgeDataset.__getitem__` (`feat = data[:, 3:4]`), `src/model.py` (`input_channels=1`)
+**Source**: `src/dataset.py` - `BridgeDataset.__getitem__` (`feat = data[:, 3:4]`), `src/model.py` (`input_channels=1`)
 
 ---
 
@@ -96,4 +96,4 @@ Intensity encodes surface reflectance — useful for material discrimination (as
 
 **Trade-off**: Each bridge spawns a child process (~200ms overhead), but this is negligible vs. PDAL download time. The Pool provides parallelism (N workers); the subprocess provides killability. Inference uses local file reads + GPU ops that return to the eval loop between steps, so SIGALRM works there.
 
-**Source**: `src/download_and_weak_supervise_hucs.py` — `_run_bridge_in_subprocess()`, `_bridge_subprocess_target()`
+**Source**: `src/download_and_weak_supervise_hucs.py` - `_run_bridge_in_subprocess()`, `_bridge_subprocess_target()`

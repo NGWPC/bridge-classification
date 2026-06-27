@@ -4,7 +4,7 @@ Scans per-HUC bridge inventories (GeoPackage files), spatially queries available
 lidar sources, diffs against existing split files, and outputs a stratified
 sample of unseen candidates for gold annotation.
 
-No S3 access required — all inputs are local files.
+No S3 access required - all inputs are local files.
 
 Workflow
 --------
@@ -14,11 +14,11 @@ candidate has a `proven_linear` column:
   - proven_linear=True:  The bridge's osm_id IS in train/val/test splits
     (with a different lidar source). The bridge already passed the linearity
     check in the pipeline, so it's guaranteed linear. The candidate uses a
-    new lidar survey the model never trained on — same physical bridge,
+    new lidar survey the model never trained on - same physical bridge,
     different point cloud.
 
   - proven_linear=False: The bridge's osm_id is NOT in any split file.
-    Linearity is unknown — per-bridge pass rate is low (~1%), but the
+    Linearity is unknown - per-bridge pass rate is low (~1%), but the
     candidate pool is large (113K+), so running all candidates through
     the pipeline yields sufficient linear bridges (76 from 48 HUC8s
     observed in first full run, 2026-04-28).
@@ -39,7 +39,7 @@ Primary approach (truly unseen bridges):
 
 Fallback (if not enough pass the pipeline):
     1. Run with --proven-linear true --sample-size 50
-       (guaranteed linear — same bridge, new lidar source)
+       (guaranteed linear - same bridge, new lidar source)
     2. Send directly to annotators (no pipeline filtering needed)
 
 Usage:
@@ -63,7 +63,8 @@ Usage:
     python src/download_and_weak_supervise_hucs.py \
         --hucs <huc_ids_from_csv> \
         --osm-ids <osm_ids_from_csv> \
-        --skip-existing
+        --skip-existing \
+        --results-csv data/ml-data/new-source-candidates/results.csv
 """
 
 import argparse
@@ -360,7 +361,7 @@ def main() -> None:
     print_summary(candidates, sample)
 
     # Step 9: Print next-step command
-    print(f"\nNext step — process candidates through the pipeline:")
+    print(f"\nNext step - process candidates through the pipeline:")
     print(f"  python src/download_and_weak_supervise_hucs.py \\")
     print(f"      --hucs $(cat {hucs_file}) \\")
     print(f"      --osm-ids $(cat {osm_ids_file}) \\")

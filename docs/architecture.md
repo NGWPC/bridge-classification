@@ -4,7 +4,7 @@
 
 **What**: Automated classification of 3D LiDAR point clouds around bridges into [4 semantic classes](#classification-schema).
 
-**Who**: Built for the NOAA Office of Water Prediction (OWP) to support the National Bridge Inventory. Bridges are a critical factor in flood inundation modeling — knowing which points are the deck enables accurate hydraulic analysis and better heal DEM for Flood Inundation Mapping (FIM) purpose.
+**Who**: Built for the NOAA Office of Water Prediction (OWP) to support the National Bridge Inventory. Bridges are a critical factor in flood inundation modeling - knowing which points are the deck enables accurate hydraulic analysis and better heal DEM for Flood Inundation Mapping (FIM) purpose.
 
 **Scale**: Designed to process 550K+ bridges across the continental US using USGS 3DEP LiDAR data sourced from the Entwine Point Tile (EPT) format.
 
@@ -78,14 +78,14 @@ The definitive 4-class reference. All other components must agree with this tabl
 
 | Model Class | Name | Description | ASPRS LAS Input Codes | ASPRS LAS Output Code |
 |-------------|------|-------------|----------------------|-----------------------|
-| **0** | Background/Unclassified | Piers, pylons, trees, low noise, birds; anything not covered by classes 1–3 | 1 (Unclassified), 7 (Low Noise), all others | 1 (Unclassified) |
+| **0** | Background | Piers, pylons, trees, low noise, birds; anything not covered by classes 1–3 | 1 (Unclassified), 7 (Low Noise), all others | 1 (Unclassified) |
 | **1** | Ground/Water | Non-bridge surface: river banks, road approaches, water surface | 2 (Ground), 9 (Water) | 2 (Ground) |
-| **2** | Bridge Deck | Primary target — the bridge pavement surface | 17 (Bridge Deck) | 17 (Bridge Deck) |
-| **3** | Obstacles/High Noise | Objects on the bridge: cars, light poles, fences, wires, guard rails | 18 (High Noise) | 18 (High Noise) |
+| **2** | Bridge Deck | Primary target - the bridge pavement surface | 17 (Bridge Deck) | 17 (Bridge Deck) |
+| **3** | Obstacles | Objects on the bridge: cars, light poles, fences, wires, guard rails | 18 (High Noise) | 18 (High Noise) |
 
 **Source references:**
 
-- Canonical definitions: `src/constants.py` — `LAS_TO_MODEL_MAP`, `MODEL_TO_LAS_MAP`, `CLASS_NAMES`
+- Canonical definitions: `src/constants.py` - `LAS_TO_MODEL_MAP`, `MODEL_TO_LAS_MAP`, `CLASS_NAMES`
 - Input mapping used by: `src/preprocess_bridges.py`
 - Output mapping used by: `src/inference.py`
 
@@ -93,7 +93,7 @@ The definitive 4-class reference. All other components must agree with this tabl
 
 ## Phase A: Silver Data Generation (Weak Supervision)
 
-**Script**: `src/download_and_weak_supervise_hucs.py` | **Algorithm module**: `src/weak_supervision.py`
+**Script**: `src/download_and_weak_supervise_hucs.py` | **Algorithm module**: `src/weak_supervision.py` | **Design**: [Decision #2](decisions.md#2-weak-supervision-via-ransac-for-scale), [Decision #4](decisions.md#4-deterministic-ransac-ordering)
 
 The weak supervision pipeline generates labeled training data without manual annotation.
 
@@ -105,6 +105,8 @@ The weak supervision pipeline generates labeled training data without manual ann
 3. **Ground Filtering**: SMRF (Simple Morphological Filter) assigns preliminary ground/non-ground labels
    - `scalar=1.25, slope=0.05, threshold=0.5, window=10.0`
    - Ignores existing noise labels (ASPRS 7)
+   - Runs with default `only_ground=false` - ground points get class 2, non-ground get class 1 (Unclassified), and class 7 is preserved via `ignore`.\
+     Original ASPRS classes (e.g. water 9) are overwritten before the bridge/obstacle rules run.
 4. **Deterministic Ordering**: Points sorted `np.lexsort((Z, Y, X))` then shuffled with `seed=27` (configurable via `BridgeProcessingConfig.deterministic_ordering_seed`)
    - Required because EPT chunk order is non-deterministic and OS-dependent
 5. **RANSAC Plane Fitting**: Fits a plane to the bridge deck
@@ -141,35 +143,11 @@ All parameters live in the `BridgeProcessingConfig` dataclass. Key fields:
 
 **Script**: `src/preprocess_bridges.py`
 
-Converts weak-supervised LAZ files to normalized NumPy arrays for training.
+Converts weak-supervised LAZ files to normalized NumPy arrays for training: class remapping (`LAS_TO_MODEL_MAP`), coordinate centering/flooring, and intensity normalization.
 
-### Steps
+See [Data Pipeline - Preprocessing](data-pipeline.md#step-2-preprocess-normalize) for transformations, output shapes, and metadata format.
 
-1. **Read LAZ**: PDAL `readers.las` extracts X, Y, Z, Intensity, Classification
-2. **Class remapping** (`LAS_TO_MODEL_MAP`): ASPRS codes → model classes 0–3; all unmapped codes → 0 (Background)
-3. **Coordinate normalization**:
-   - `X_norm = X − mean(X)`, `Y_norm = Y − mean(Y)` (bridge centered at origin)
-   - `Z_norm = Z − min(Z)` (relative height, zero-floored)
-4. **Intensity normalization**: `I_norm = Intensity / max(Intensity)` → 0–1 range
-5. **Output**:
-   - `.npy`: `(N, 5)` float32 — columns `[x, y, z, intensity, label]`
-   - `.json`: offsets, point count, class distribution (used for class weight calculation)
-
-### Normalization offsets (stored in `.json`)
-
-```json
-{
-  "original_file": "bridge_5069009_USGS_LPC_PA_...laz",
-  "original_path": "/data/ml-data/silver_training/02050206/bridge_5069009_USGS_LPC_PA_...laz",
-  "offsets": {
-    "x_center": -8548539.41,
-    "y_center": 4995360.81,
-    "z_min": 128.93
-  }
-}
-```
-
-These offsets allow reconstructing absolute coordinates: `X_abs = X_norm + x_center`, `Y_abs = Y_norm + y_center`, `Z_abs = Z_norm + z_min`.
+Reconstruction formula: `X_abs = X_norm + x_center`, `Y_abs = Y_norm + y_center`, `Z_abs = Z_norm + z_min`.
 
 ---
 
@@ -177,17 +155,11 @@ These offsets allow reconstructing absolute coordinates: `X_abs = X_norm + x_cen
 
 **Script**: `utils/split_data.py`
 
-### Strategy
+Each HUC8's bridges are split independently at the configured ratios (70/15/15 default), ensuring geographic diversity across all splits.
 
-- Each HUC8's bridges are split independently at the configured ratios, ensuring geographic diversity across all splits
-- Default ratios: 70% train / 15% validation / 15% test (configurable via `--train-ratio`, `--val-ratio`, `--test-ratio`)
-- **Holdout test set**: Fixed bridge IDs from a file (`--holdout-test-ids`) are reserved for testing regardless of the split ratios
-- **Symlink mode** (`--symlink`): Creates symlinks instead of copies, saving disk space for large datasets
+Individual bridges never appear in more than one split, preventing spatial data leakage from nearby bridges sharing terrain, land cover, and LiDAR acquisition parameters.
 
-### Outputs
-
-- `training/`, `validation/`, `testing/` - HUC-organized directories with `.npy` + `.json` files
-- `split_manifest.json`, `split_{train,val,test}_ids.txt` — manifest files for reproducibility
+See [Decision #3](decisions.md#3-per-huc-data-organization) for rationale and [Data Pipeline - Splitting](data-pipeline.md#step-3-split-train-val-test) for output directory structure.
 
 ### Class Weights (`utils/calculate_weights.py`)
 
@@ -197,13 +169,23 @@ Reads `.json` metadata from `training/` and computes inverse-frequency weights:
 W_c = Total_Points / (N_classes × Count_c)
 ```
 
-Output: `class_weights.json` with a `"weights"` list ordered `[w0, w1, w2, w3]`.
+Output: `class_weights.json` with a `"weights"` list and per-class `"total_counts"`.
+
+```json
+{
+  "weights": [6.22, 1.49, 0.36, 2.34],
+  "total_counts": {"0": 154663102, "1": 645015460, "2": 2636395892, "3": 410064603}
+}
+```
+
+Higher weight = rarer class (Background is rare near bridges; Deck is common).
+Weights shown rounded; actual file has full precision.
 
 ---
 
 ## Phase D: Model Architecture
 
-**Module**: `src/model.py`
+**Module**: `src/model.py` | **Design**: [Decision #1](decisions.md#1-spconv-over-minkowskiengine-torchsparse)
 
 ### Sparse 3D U-Net (`SparseUNet`)
 
@@ -255,16 +237,9 @@ Two `SubMConv3d` layers (maintains sparsity pattern) with a shortcut connection 
 
 ### Data Loading
 
-`BridgeDataset` (from `src/dataset.py`) performs on-the-fly voxelization:
+`BridgeDataset` (from `src/dataset.py`) performs on-the-fly voxelization, augmentation, and optional `max_voxels` subsampling.
 
-1. Load `.npy` → split into xyz, intensity, labels
-2. Shift `xyz -= xyz.min()` (guarantees non-negative SpConv indices)
-3. Optional augmentation: random Z-axis rotation + Gaussian jitter (`σ=0.01 m`)
-4. Quantize: `discrete_coords = floor(xyz / voxel_size)` → int32
-5. Aggregate voxels: mean intensity, majority-vote labels (`voxelize`)
-6. Optional cap: randomly subsample to `max_voxels` if exceeded (OOM prevention)
-
-`sparse_collate_fn` prepends a batch index to coordinates: `[batch_id, x, y, z]`.
+See [Data Pipeline - Training](data-pipeline.md#step-4-training) for the loading flow and shape transformation table, and [Decision #5](decisions.md#5-voxel-level-majority-vote-for-labels) / [Decision #7](decisions.md#7-intensity-only-features-xyz-via-voxel-grid) for design rationale.
 
 ### Training Configuration
 
@@ -285,18 +260,8 @@ Two `SubMConv3d` layers (maintains sparsity pattern) with a shortcut connection 
 
 **Script**: `src/inference.py`
 
-1. Load checkpoint → `SparseUNet(input_channels=1, num_classes=4)`
-2. Read raw LAZ via PDAL
-3. Normalize on-the-fly: `xyz -= xyz.min()`, `intensity /= max(intensity)`
-4. Voxelize: `discrete_coords = floor(xyz / voxel_size)`
-5. Find unique voxels + inverse mapping (`np.unique(..., return_inverse=True)`)
-6. Aggregate mean intensity per voxel
-7. Build `SparseConvTensor`, run `model.forward()` with `torch.no_grad()`
-8. `argmax` → voxel predictions
-9. Map back to original points via `unique_inverse_indices`
-10. Map model classes → ASPRS codes via `MODEL_TO_LAS_MAP`
-11. Write classified LAZ via PDAL (preserves all original fields)
+Loads a trained checkpoint, reads raw LAZ files, voxelizes on-the-fly, runs the model, maps voxel predictions back to original points via inverse indices, and writes classified LAZ with ASPRS codes (`MODEL_TO_LAS_MAP`).
 
----
+See [Data Pipeline - Inference](data-pipeline.md#step-5-inference) for the step-by-step flow.
 
-For deployment and scaling, see [AWS Batch Inference](aws-batch-inference.md).
+For batch inference at scale, see [AWS Batch Inference](aws-batch-inference.md).
