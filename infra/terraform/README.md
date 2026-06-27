@@ -1,4 +1,4 @@
-# Bridge Classification — Infrastructure (Terraform)
+# Bridge Classification - Infrastructure (Terraform)
 
 Layered Terraform that provisions **all** AWS resources for the bridge-classification batch inference pipeline.
 
@@ -13,7 +13,7 @@ bootstrap ──(state bucket)──▶ foundation ──(subnet IDs, role ARNs)
 | Layer | Creates | Cadence |
 |-------|---------|---------|
 | `bootstrap/` | S3 bucket for Terraform remote state (versioned, encrypted, locked, `prevent_destroy`) | Once per account |
-| `foundation/` | IAM roles + networking (VPC/subnets/SG); networking optional — create fresh or reference an existing VPC | Rarely |
+| `foundation/` | IAM roles + networking (VPC/subnets/SG); networking optional - create fresh or reference an existing VPC | Rarely |
 | `app/` | Workload: ECR repo, CloudWatch log group, Batch compute env / job queue / job definition | Often |
 
 ## Prerequisites
@@ -25,7 +25,7 @@ bootstrap ──(state bucket)──▶ foundation ──(subnet IDs, role ARNs)
 ## State & safety
 
 - Remote state in S3, one key per layer; S3-native locking (`use_lockfile`, TF ≥ 1.10).
-- `allowed_account_ids` guard in both `backend.hcl` and `providers.tf` — a wrong account fails fast.
+- `allowed_account_ids` guard in both `backend.hcl` and `providers.tf` - a wrong account fails fast.
 - `backend.hcl` and `terraform.tfvars` are git-ignored; copy from the `*.example` files.
   `.terraform.lock.hcl` is committed.
 - Select the account via `export AWS_PROFILE=<profile>`; no profile is hard-coded.
@@ -72,7 +72,7 @@ terraform output                              # feed these values into app/terra
 ```
 
 **Networking toggle.**
-- `create_networking` (default `true`) creates the full VPC — one public subnet per `public_subnet_cidrs` entry, IGW, routing, an S3 gateway endpoint, and the Batch SG.
+- `create_networking` (default `true`) creates the full VPC - one public subnet per `public_subnet_cidrs` entry, IGW, routing, an S3 gateway endpoint, and the Batch SG.
 - Set it `false` to create **none** of that and instead reference an existing VPC via `existing_subnet_ids` + `existing_security_group_id`.
 - Either way foundation's `subnet_ids` / `batch_security_group_id` outputs resolve to the right values, so `app` is unaffected.
 
@@ -81,7 +81,7 @@ terraform output                              # feed these values into app/terra
 - Set it `false` to reference existing roles via `existing_batch_job_role_arn`, `existing_batch_instance_profile_arn`, `existing_spot_fleet_role_arn`, `existing_batch_service_role_arn`.
 - Either way foundation's role ARN outputs resolve to the right values, so `app` is unaffected.
 
-**Ownership tags.** Optional `team` and `poc` variables (empty by default). When set, `Team` and `POC` tags are added to all resources. Omitted from tags when empty — OWP deployments can skip them.
+**Ownership tags.** Optional `team` and `poc` variables (empty by default). When set, `Team` and `POC` tags are added to all resources. Omitted from tags when empty - OWP deployments can skip them.
 
 `data_bucket` scopes the Batch job role to the bucket holding the model / input / predictions.
 
@@ -120,6 +120,88 @@ terraform apply
 terraform output
 ```
 
+## App variable reference
+
+All variables defined in `app/variables.tf`.
+Override in `app/terraform.tfvars`.
+Set `AWS_PROFILE` in your environment (not in Terraform).
+
+### AWS & General
+
+| Variable             | Default             | Description                                |
+| -------------------- | ------------------- | ------------------------------------------ |
+| `allowed_account_id` | (required)          | 12-digit AWS account ID - safety guard     |
+| `region`             | `us-east-1`         | AWS region                                 |
+| `project_name`       | `bridge-classifier` | Prefix for all resource names              |
+| `team`               | `""`                | Team name for cost-allocation tagging (omitted if empty) |
+| `poc`                | `""`                | Point of contact for resources (omitted if empty) |
+
+### Foundation inputs
+
+Paste from `cd infra/terraform/foundation && terraform output`:
+
+| Variable                     | Description                                            |
+| ---------------------------- | ------------------------------------------------------ |
+| `subnets`                    | Subnet IDs for the Batch compute environment           |
+| `batch_security_group_id`    | Security group ID for Batch compute                    |
+| `batch_job_role_arn`         | IAM role for job containers (S3 read/write scoped to data bucket) |
+| `batch_instance_profile_arn` | EC2 instance profile for compute instances             |
+| `spot_fleet_role_arn`        | EC2 Spot Fleet role (only used when `use_spot = true`) |
+| `batch_service_role_arn`     | AWS Batch service-linked role                          |
+
+### Compute
+
+| Variable         | Default           | Description                                       |
+| ---------------- | ----------------- | ------------------------------------------------- |
+| `instance_types` | `["g4dn.xlarge"]` | GPU instance type(s)                              |
+| `max_vcpus`      | `256`             | Max vCPUs across all instances                    |
+| `use_spot`       | `true`            | Use Spot instances (auto-retries on interruption) |
+
+### Job definition
+
+| Variable              | Default | Description                                |
+| --------------------- | ------- | ------------------------------------------ |
+| `job_vcpus`           | `3`     | vCPUs per container                        |
+| `job_memory`          | `15000` | Memory (MB) per container                  |
+| `shared_memory_size`  | `4096`  | Shared memory (MB) for PyTorch/spconv      |
+| `job_timeout_seconds` | `28800` | Max wall-clock seconds per child (8 hours) |
+| `image_tag`           | `latest`| ECR image tag (pin to avoid breaking in-flight jobs) |
+
+### S3 / Inference
+
+| Variable           | Description                     |
+| ------------------ | ------------------------------- |
+| `s3_bucket`        | S3 bucket for all I/O           |
+| `s3_input_prefix`  | Prefix for source LAS/LAZ files |
+| `s3_manifest_uri`  | Full S3 URI of manifest         |
+| `s3_model_uri`     | Full S3 URI of model checkpoint |
+| `s3_output_prefix` | Where output files are uploaded |
+
+### Inference runtime
+
+| Variable         | Default  | Description                                   |
+| ---------------- | -------- | --------------------------------------------- |
+| `inference_mode` | `masked` | Output mode: `masked`, `raw`, or `both`       |
+| `bridge_timeout` | `150`    | Per-bridge timeout in seconds before skipping |
+| `retry_attempts` | `3`      | SPOT interruption auto-retries                |
+
+## App outputs
+
+Available after `terraform apply` via `terraform output`.
+Used by `scripts/build_and_push.sh` and `scripts/submit_batch_job.py`.
+
+| Output                     | Description                             |
+| -------------------------- | --------------------------------------- |
+| `ecr_repository_url`       | ECR URL for `docker push`               |
+| `job_definition_name`      | Batch job definition name               |
+| `job_queue_name`           | Batch job queue name                    |
+| `compute_environment_name` | Batch compute environment name          |
+| `log_group_name`           | CloudWatch log group for Batch job logs |
+| `s3_manifest_uri`          | S3 manifest URI (passthrough)           |
+| `aws_region`               | AWS region (passthrough for scripts)    |
+| `s3_bucket`                | S3 data bucket (passthrough for run tracking) |
+| `s3_output_prefix`         | S3 output prefix (passthrough for run tracking) |
+
 ## Per-account config
 
-Each account keeps its own `backend.hcl` + `terraform.tfvars` per layer. If the account already has a VPC, set `create_networking = false` and supply its subnet/SG IDs — everything downstream is identical.
+Each account keeps its own `backend.hcl` + `terraform.tfvars` per layer. If the account already has a VPC, set `create_networking = false` and supply its subnet/SG IDs - everything downstream is identical.
