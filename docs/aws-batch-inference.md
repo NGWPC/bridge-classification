@@ -100,10 +100,10 @@ export AWS_PROFILE=my-profile
 
 ```bash
 # Submit: Batch uses AWS_PROFILE, manifest is read via --profile
-python scripts/submit_batch_job.py --manifest s3://... --profile data-account
+python scripts/submit_batch_job.py --manifest s3://my-bucket/path/manifest.txt --profile data-account
 
 # Report: S3 audit via --profile, CloudWatch via --batch-profile
-python scripts/post_run_report.py --bucket ... --profile data-account --batch-profile infra-account
+python scripts/post_run_report.py --bucket my-bucket --output-prefix my-output-prefix --profile data-account --batch-profile infra-account
 ```
 
 | Script | `AWS_PROFILE` | `--profile` | `--batch-profile` |
@@ -237,7 +237,7 @@ python scripts/audit_outputs.py \
     --profile my-profile
 
 # Tune concurrency (default: 200 threads)
-python scripts/audit_outputs.py ... --workers 100
+python scripts/audit_outputs.py --manifest s3://my-bucket/path/manifest.txt --bucket my-bucket --output-prefix my-prefix --workers 100
 ```
 
 If outputs are missing, upload the missing manifest and re-submit:
