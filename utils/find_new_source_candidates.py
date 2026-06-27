@@ -4,7 +4,7 @@ Scans per-HUC bridge inventories (GeoPackage files), spatially queries available
 lidar sources, diffs against existing split files, and outputs a stratified
 sample of unseen candidates for gold annotation.
 
-No S3 access required — all inputs are local files.
+No S3 access required - all inputs are local files.
 
 Workflow
 --------
@@ -14,29 +14,32 @@ candidate has a `proven_linear` column:
   - proven_linear=True:  The bridge's osm_id IS in train/val/test splits
     (with a different lidar source). The bridge already passed the linearity
     check in the pipeline, so it's guaranteed linear. The candidate uses a
-    new lidar survey the model never trained on — same physical bridge,
+    new lidar survey the model never trained on - same physical bridge,
     different point cloud.
 
   - proven_linear=False: The bridge's osm_id is NOT in any split file.
-    Linearity is unknown — per-bridge pass rate is low (~1%), but the
+    Linearity is unknown - per-bridge pass rate is low (~1%), but the
     candidate pool is large (113K+), so running all candidates through
     the pipeline yields sufficient linear bridges (76 from 48 HUC8s
     observed in first full run, 2026-04-28).
 
 Use --proven-linear to filter before sampling.
 
+Outputs: new_source_candidates_all.csv, sample_hucs.txt, sample_osm_ids.txt
+(written to --output-dir).
+
 Primary approach (truly unseen bridges):
     1. Run with --proven-linear false --sample-size 0 (all candidates)
-    2. Process ALL candidates through download_and_weak_supervise_hucs.py
-       (rejects complex/curved bridges automatically)
-    3. Extract successes from logs (archive/scripts/extract_successful_bridges.py)
+    2. Process through download_and_weak_supervise_hucs.py using sample_hucs.txt
+       and sample_osm_ids.txt (rejects curved bridges automatically).
+       Use --results-csv to save per-bridge results.
+    3. Identify successes from the results CSV or by listing new .laz files
+       in <silver-dir> arg folder of download_and_weak_supervise_hucs.py
     4. Select final ~50 bridges (1 per HUC first for diversity)
-    Note: small samples (e.g. --sample-size 250) yield very few passes.
-    The full pool is needed to get enough linear bridges.
 
 Fallback (if not enough pass the pipeline):
     1. Run with --proven-linear true --sample-size 50
-       (guaranteed linear — same bridge, new lidar source)
+       (guaranteed linear - same bridge, new lidar source)
     2. Send directly to annotators (no pipeline filtering needed)
 
 Usage:
@@ -56,11 +59,12 @@ Usage:
         --output-dir data/ml-data/new-source-candidates \
         --proven-linear true --sample-size 50 --max-per-huc 3
 
-    # Process candidates through the pipeline (rejects complex bridges)
+    # Next step: process candidates through the pipeline
     python src/download_and_weak_supervise_hucs.py \
         --hucs <huc_ids_from_csv> \
         --osm-ids <osm_ids_from_csv> \
-        --skip-existing
+        --skip-existing \
+        --results-csv data/ml-data/new-source-candidates/results.csv
 """
 
 import argparse
@@ -197,8 +201,6 @@ def find_candidates(
     print(f"  New candidates found: {len(candidates)}")
 
     return candidates
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +361,7 @@ def main() -> None:
     print_summary(candidates, sample)
 
     # Step 9: Print next-step command
-    print(f"\nNext step — process candidates through the pipeline:")
+    print(f"\nNext step - process candidates through the pipeline:")
     print(f"  python src/download_and_weak_supervise_hucs.py \\")
     print(f"      --hucs $(cat {hucs_file}) \\")
     print(f"      --osm-ids $(cat {osm_ids_file}) \\")

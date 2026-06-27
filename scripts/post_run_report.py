@@ -1,7 +1,7 @@
 """
-Bridge Classification — Post-Run Report
+Bridge Classification - Post-Run Report
 
-Generates a comprehensive report after an AWS Batch inference run completes.
+Generates a report after an AWS Batch inference run completes.
 Reads _run_config.json (saved at submission), audits S3 outputs, queries
 CloudWatch logs for per-child summaries and per-bridge timing, and saves
 _run_report.json to the output prefix.
@@ -183,7 +183,7 @@ def compute_percentile(values: List[float], pct: float) -> float:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Bridge Classification — Post-Run Report')
+    parser = argparse.ArgumentParser(description='Bridge Classification - Post-Run Report')
     parser.add_argument('--bucket', type=str, required=True, help='S3 bucket')
     parser.add_argument('--output-prefix', type=str, required=True, help='S3 output prefix (where predictions are)')
     parser.add_argument('--input-prefix', type=str, default='', help='S3 input prefix (for extension probing during audit)')
@@ -285,7 +285,7 @@ def main() -> None:
                 for bridge, reason in list(missing_reasons.items())[:10]:
                     print(f"  {bridge}: {reason}")
     else:
-        print("\nWARNING: Job has no timestamps — skipping CloudWatch queries")
+        print("\nWARNING: Job has no timestamps - skipping CloudWatch queries")
 
     # --- 5. Build report ---
     job_info_clean = {k: v for k, v in job_info.items() if not k.endswith('_ms')}

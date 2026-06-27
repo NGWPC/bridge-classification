@@ -1,6 +1,6 @@
 # USGS Lidar Bridge Classification
 
-A comprehensive pipeline for processing bridge lidar data organized by Hydrologic Unit Code (HUC) regions. This project downloads lidar point cloud data, applies weak supervision rules for labeling, normalizes coordinates, and prepares data for machine learning. It includes **model training** (sparse 3D U-Net) and **inference** for bridge point cloud classification with multiple output modes (masked, raw, or both); **scaling with AWS Batch** for parallel inference on SPOT instances is [supported](docs/aws-batch-inference.md).
+An end-to-end pipeline for processing bridge lidar data organized by Hydrologic Unit Code (HUC) regions. This project downloads lidar point cloud data, applies weak supervision rules for labeling, normalizes coordinates, and prepares data for machine learning. It includes **model training** (sparse 3D U-Net) and **inference** for bridge point cloud classification with multiple output modes (masked, raw, or both); **scaling with AWS Batch** for parallel inference on SPOT instances is [supported](docs/aws-batch-inference.md).
 
 ## Table of Contents
 
@@ -20,11 +20,11 @@ A comprehensive pipeline for processing bridge lidar data organized by Hydrologi
 
 For detailed design documentation, see the `docs/` directory (or build the docs site with MkDocs):
 
-- **[Architecture](docs/architecture.md)** — System design, classification schema, algorithm details.
-- **[Data Pipeline](docs/data-pipeline.md)** — Step-by-step data flow walkthrough with data shapes at each stage.
-- **[AWS Batch Inference](docs/aws-batch-inference.md)** — Terraform infrastructure, job submission, SPOT instance handling, inference modes, post-run audit, and configuration reference for scaling inference with AWS Batch array jobs.
-- **[Module Reference](docs/module-reference.md)** — Summary of every module's public API and CLI arguments.
-- **[Design Decisions](docs/decisions.md)** — Rationale for key architectural choices.
+- **[Architecture](docs/architecture.md)** - System design, classification schema, algorithm details.
+- **[Data Pipeline](docs/data-pipeline.md)** - Step-by-step data flow walkthrough with data shapes at each stage.
+- **[AWS Batch Inference](docs/aws-batch-inference.md)** - Terraform infrastructure, job submission, SPOT instance handling, inference modes, post-run audit, and configuration reference for scaling inference with AWS Batch array jobs.
+- **[Module Reference](docs/module-reference.md)** - Summary of every module's public API and CLI arguments.
+- **[Design Decisions](docs/decisions.md)** - Rationale for key architectural choices.
 
 ### Building the docs locally
 
@@ -45,7 +45,7 @@ mkdocs gh-deploy
 
 ## Pipeline Overview
 
-Data flows from OSM bridge geometries and USGS LiDAR sources through download and weak supervision, then normalization, train/val/test split, optional class-weight computation, and finally model training. The pipeline is designed to scale to hundreds of thousands of bridges; ensure sufficient disk space for silver_training and normalized outputs.
+Data flows from OSM bridge geometries and USGS LiDAR sources through download and weak supervision, then normalization, train/val/test split, optional class-weight computation, and finally model training. The pipeline scales to hundreds of thousands of bridges; ensure sufficient disk space for silver_training and normalized outputs.
 
 ```mermaid
 flowchart LR;
@@ -208,7 +208,7 @@ docker compose run --rm \
 
 > Use the same `--exp-name` as in your train command so the log lives next to `version_0/` (e.g. `experiments/bridge-base-all-data-v1/training_console.log`).
 
-**Fine-tune from a pretrained checkpoint** (load weights only, fresh optimizer and epoch counter — unlike `--ckpt-path` which resumes full training state). Use `--freeze-encoder` to train only the decoder and classifier while keeping the encoder frozen:
+**Fine-tune from a pretrained checkpoint** (load weights only, fresh optimizer and epoch counter - unlike `--ckpt-path` which resumes full training state). Use `--freeze-encoder` to train only the decoder and classifier while keeping the encoder frozen:
 
 ```bash
 mkdir -p experiments/ft-gold-optA-v0
@@ -250,7 +250,7 @@ See [Troubleshooting](#troubleshooting) for permission and other issues.
 
 #### Option 2: Local Conda Install
 
-If you prefer to run locally without Docker, this project includes an `environment.yaml` file that handles all dependencies, including geospatial libraries and CUDA-accelerated ML tools.
+For local installs without Docker, `environment.yaml` handles all dependencies (geospatial and CUDA).
 
 ```bash
 # 1. Create the environment from file
@@ -442,18 +442,18 @@ data/
 
 ## Classification Labels
 
-See [Architecture — Classification Schema](docs/architecture.md#classification-schema) for the 4-class labeling scheme and ASPRS code mappings.
+See [Architecture - Classification Schema](docs/architecture.md#classification-schema) for the 4-class labeling scheme and ASPRS code mappings.
 
 ## Output Structure
 
 ### Output directories
 
-All directory paths are CLI-configurable — the defaults shown below can be overridden with `--source-dir`, `--silver-dir`, `--output-dir`, etc. See each script's `--help` for options.
+All directory paths are CLI-configurable - the defaults shown below can be overridden with `--source-dir`, `--silver-dir`, `--output-dir`, etc. See each script's `--help` for options.
 
 The pipeline supports two directory layouts:
 
-- **Default paths** (`data/ml-data/`) — standard training workflow (Steps 1–4)
-- **Named runs** (`data/runs/<run-name>/`) — isolated runs created by `utils/prepare_run.py` (e.g., from a flat NOAA GeoPackage)
+- **Default paths** (`data/ml-data/`) - standard training workflow (Steps 1–4)
+- **Named runs** (`data/runs/<run-name>/`) - isolated runs created by `utils/prepare_run.py` (e.g., from a flat NOAA GeoPackage)
 
 ```text
 data/
@@ -469,6 +469,10 @@ data/
 │   ├── testing/                     # Step 3: test split
 │   ├── gold-data/                   # Human-annotated bridges
 │   ├── gold-split/                  # Gold train/val/test
+│   ├── evaluation_results/          # Runtime: model evaluation outputs
+│   ├── experiments/                 # Runtime: training experiment logs
+│   ├── split_manifest.json          # Step 3: split metadata
+│   ├── split_{train,val,test}_ids.txt  # Step 3: per-split bridge IDs
 │   └── class_weights.json           # Step 3a (optional)
 │
 └── runs/<run-name>/                 # Named runs (via prepare_run.py)
@@ -484,21 +488,21 @@ data/
 
 When running inference at scale via [AWS Batch](docs/aws-batch-inference.md), the pipeline writes prediction files and two observability files to the S3 output prefix:
 
-- **`_run_config.json`** — saved at job submission by `scripts/submit_batch_job.py` (job ID, manifest URI, array size, git commit, SPOT rate estimate)
-- **`_run_report.json`** — generated after completion by `scripts/post_run_report.py` (S3 audit results, per-child and per-bridge timing, computed cost estimate, failure reasons for missing bridges)
-- **`_missing.txt`** — manifest of bridges that failed or were skipped (for re-submission)
+- **`_run_config.json`** - saved at job submission by `scripts/submit_batch_job.py` (job ID, manifest URI, array size, git commit, SPOT rate estimate)
+- **`_run_report.json`** - generated after completion by `scripts/post_run_report.py` (S3 audit results, per-child and per-bridge timing, computed cost estimate, failure reasons for missing bridges)
+- **`_missing.txt`** - manifest of bridges that failed or were skipped (for re-submission)
 - Per-bridge prediction files (one per bridge, naming depends on inference mode):
-  - **masked**: `{huc}_bridge_{osmid}_{source}_bridge_masked.laz` — original ASPRS classes preserved, bridge deck points reclassified to class 17
-  - **raw**: `{huc}_bridge_{osmid}_{source}_predicted.laz` — all model class labels (0–3) written directly
+  - **masked**: `{huc}_bridge_{osmid}_{source}_bridge_masked.laz` - original ASPRS classes preserved, bridge deck points reclassified to class 17
+  - **raw**: `{huc}_bridge_{osmid}_{source}_predicted.laz` - all model class labels (0–3) written directly
   - **both**: writes both files per bridge
 
 ### Notebooks
 
 The **notebooks/** folder contains reproducible Jupyter notebooks:
 
-- **`notebooks/dataset_overview.ipynb`** — Downloads ml-data artifacts from S3 (split ID files, `class_weights.json`, optional `osm_bridge_counts.json`), computes unique HUCs in the split, train/val/test line counts, total points from class weights, and OSM bridge counts (when the counts file is on S3). Produces a **class distribution** horizontal bar chart and, if `SILVER_NORMALIZED_DIR` is set to a local path, a **per-bridge point count histogram**. Downloads HUC8 boundaries from S3 and produces a map of which HUC8s appear in the dataset split.
+- **`notebooks/dataset_overview.ipynb`** - Downloads ml-data artifacts from S3 (split ID files, `class_weights.json`, optional `osm_bridge_counts.json`), computes unique HUCs in the split, train/val/test line counts, total points from class weights, and OSM bridge counts (when the counts file is on S3). Produces a **class distribution** horizontal bar chart and, if `SILVER_NORMALIZED_DIR` is set to a local path, a **per-bridge point count histogram**. Downloads HUC8 boundaries from S3 and produces a map of which HUC8s appear in the dataset split.
 
-- **`notebooks/training_plots.ipynb`** — Plots training curves from experiment metrics (compare/merge runs, optional best-epoch annotation). Configure `EXPERIMENTS_ROOT`, `EXPERIMENT_NAMES`, and `ANNOTATE_BEST_METRIC` in the notebook. Can be extended later with validation/test metrics, confusion matrix, etc.
+- **`notebooks/training_plots.ipynb`** - Plots training curves from experiment metrics (compare/merge runs, optional best-epoch annotation). Configure `EXPERIMENTS_ROOT`, `EXPERIMENT_NAMES`, and `ANNOTATE_BEST_METRIC` in the notebook. Can be extended later with validation/test metrics, confusion matrix, etc.
 
 Run the dataset overview notebook after configuring the S3 bucket/prefix (and optional AWS profile) in the Config cell or via environment variables (`BRIDGE_S3_BUCKET`, `BRIDGE_S3_ML_PREFIX`, `AWS_PROFILE`). HUC8 boundaries are read from S3 (`BRIDGE_S3_HUC8_KEY`); see the notebook for details.
 

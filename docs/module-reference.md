@@ -24,8 +24,8 @@ Shared constants and lightweight utilities. Zero heavy dependencies (no torch, s
 | `BRIDGE_DECK_ASPRS_CODE`  | `17`         | ASPRS code for bridge deck                                     |
 | `OBSTACLES_MODEL_CLASS`   | `3`          | Model class for obstacles                                      |
 | `OBSTACLES_ASPRS_CODE`    | `18`         | ASPRS code for obstacles                                       |
-| `MODEL_TO_LAS_MAP`        | dict         | `{0: 1, 1: 2, 2: 17, 3: 18}` — model class to ASPRS output code |
-| `LAS_TO_MODEL_MAP`        | dict         | `{2: 1, 9: 1, 17: 2, 18: 3}` — ASPRS code to model class     |
+| `MODEL_TO_LAS_MAP`        | dict         | `{0: 1, 1: 2, 2: 17, 3: 18}` - model class to ASPRS output code |
+| `LAS_TO_MODEL_MAP`        | dict         | `{2: 1, 9: 1, 17: 2, 18: 3}` - ASPRS code to model class     |
 | `VOXEL_SIZE`              | `0.1`        | Default voxel size in meters                                   |
 | `SPATIAL_SHAPE_PADDING`   | `10`         | Padding added to voxel grid spatial shape                      |
 | `MIN_POINT_COUNT`         | `100`        | Skip files with fewer points                                   |
@@ -38,8 +38,8 @@ Shared constants and lightweight utilities. Zero heavy dependencies (no torch, s
 
 | Name | Description |
 |------|-------------|
-| `InferenceResult` | Enum: `SUCCESS`, `FAILED`, `SKIPPED` — typed return from `run_inference()` |
-| `InferenceMode` | Enum: `RAW`, `MASKED`, `BOTH` — output mode for inference |
+| `InferenceResult` | Enum: `SUCCESS`, `FAILED`, `SKIPPED` - typed return from `run_inference()` |
+| `InferenceMode` | Enum: `RAW`, `MASKED`, `BOTH` - output mode for inference |
 | `BridgeTimeout` | Exception raised when a bridge exceeds the per-bridge wall-clock timeout |
 | `bridge_timeout_guard(seconds)` | Context manager: sets SIGALRM timer, yields, cleans up. Raises `BridgeTimeout` on expiry. Cannot interrupt blocking C extensions (e.g. PDAL). |
 
@@ -219,6 +219,8 @@ Full HUC-based pipeline for downloading USGS LiDAR and generating weakly-supervi
 | `--skip-existing`   | False                                         | Skip bridges already processed           |
 | `--bridge-timeout`  | 300                                           | Seconds before a hung bridge is skipped  |
 | `--log-dir`         | `./logs`                                      | Directory for processing logs            |
+| `--shuffle-seed`    | random                                        | Seed for task shuffle order (reproducible debugging) |
+| `--results-csv`     | None                                          | Write per-bridge results (success, RMSE, deviation) to CSV |
 | `--no-progress`     | False                                         | Disable tqdm progress bars               |
 
 
@@ -244,7 +246,7 @@ Normalizes LAZ/LAS files from `silver_training/` into `.npy` + `.json` pairs for
 
 **Imports from shared modules:**
 
-- `LAS_TO_MODEL_MAP` from `src.constants` — `{2: 1, 9: 1, 17: 2, 18: 3}` (ASPRS code → model class)
+- `LAS_TO_MODEL_MAP` from `src.constants` - `{2: 1, 9: 1, 17: 2, 18: 3}` (ASPRS code → model class)
 - `read_las`, `normalize_intensity` from `src.las_io`
 
 **Key functions:**
@@ -273,7 +275,7 @@ Normalizes LAZ/LAS files from `silver_training/` into `.npy` + `.json` pairs for
 
 ### `src/model.py`
 
-Sparse 3D U-Net architecture using SpConv. No CLI — imported by `train.py` and `inference.py`.
+Sparse 3D U-Net architecture using SpConv. No CLI - imported by `train.py` and `inference.py`.
 
 **Classes:**
 
@@ -288,7 +290,7 @@ Sparse 3D U-Net architecture using SpConv. No CLI — imported by `train.py` and
 
 ### `src/dataset.py`
 
-Bridge point cloud dataset with on-the-fly voxelization. Pure PyTorch + numpy — no Lightning dependency. Importable by evaluation scripts, notebooks, and training.
+Bridge point cloud dataset with on-the-fly voxelization. Pure PyTorch + numpy - no Lightning dependency. Importable by evaluation scripts, notebooks, and training.
 
 **Classes:**
 
@@ -401,9 +403,9 @@ Loads a trained checkpoint, classifies a raw LAS/LAZ file, and writes a classifi
 
 **Modes:**
 
-- `masked` — bridge deck only (class 2 → ASPRS 17) overlaid on original classification
-- `raw` — all model classes replace original classification via `MODEL_TO_LAS_MAP`
-- `both` — saves `_predicted` (raw) and `_bridge_masked` (masked) files
+- `masked` - bridge deck only (class 2 → ASPRS 17) overlaid on original classification
+- `raw` - all model classes replace original classification via `MODEL_TO_LAS_MAP`
+- `both` - saves `_predicted` (raw) and `_bridge_masked` (masked) files
 
 **Usage examples:**
 
@@ -431,7 +433,7 @@ python src/inference.py \
 
 ### `src/s3_client.py`
 
-Generic S3 operations — reusable across any S3 project. No bridge-specific knowledge.
+Generic S3 operations - reusable across any S3 project. No bridge-specific knowledge.
 
 **Functions:**
 
@@ -459,7 +461,7 @@ Bridge-specific S3 path conventions for inference I/O. Resolves manifest lines t
 
 | Constant | Description |
 |----------|-------------|
-| `PROBE_EXTENSIONS` | `['.laz', '.las']` — extensions to try when manifest line has no extension |
+| `PROBE_EXTENSIONS` | `['.laz', '.las']` - extensions to try when manifest line has no extension |
 
 **Functions:**
 
@@ -609,7 +611,7 @@ Renders side-by-side 3D LiDAR point cloud figures for poster/presentation use.
 python utils/visualize_pointcloud.py gold-vs-model \
     --gold data/ml-data/gold-data-normalized/03070101/bridge_40787878_GA_Central_1_2018.npy \
     --model data/ml-data/evaluation_results/v5-gold-134/inference_output/03070101/bridge_40787878_GA_Central_1_2018.laz \
-    --title "Bridge 40787878 (GA) — Deck IoU: 79.3%" \
+    --title "Bridge 40787878 (GA) - Deck IoU: 79.3%" \
     -o notebooks/outputs/gold_vs_model.png
 ```
 
@@ -775,7 +777,7 @@ Evaluates a trained bridge classification model against human-annotated (gold) d
 
 | Class | Description |
 |-------|-------------|
-| `EvalStatus` | Enum: `OK`, `POINT_COUNT_MISMATCH`, `LOAD_ERROR`, `NO_INFERENCE_FILE`, `TIMEOUT`, `INFERENCE_ERROR`, `SKIPPED_TOO_FEW_POINTS` — typed status for evaluation steps. |
+| `EvalStatus` | Enum: `OK`, `POINT_COUNT_MISMATCH`, `LOAD_ERROR`, `NO_INFERENCE_FILE`, `TIMEOUT`, `INFERENCE_ERROR`, `SKIPPED_TOO_FEW_POINTS` - typed status for evaluation steps. |
 
 **Key functions:**
 
@@ -811,10 +813,10 @@ Evaluates a trained bridge classification model against human-annotated (gold) d
 
 **Outputs:**
 
-- `evaluation_metrics.json` — aggregate metrics (per-class, binary, overall)
-- `per_bridge_metrics.csv` — one row per bridge with all metrics
-- `confusion_matrix.png` — 4-class confusion matrices (model vs silver)
-- `confusion_matrix_binary.png` — binary confusion matrices (bridge vs non-bridge)
+- `evaluation_metrics.json` - aggregate metrics (per-class, binary, overall)
+- `per_bridge_metrics.csv` - one row per bridge with all metrics
+- `confusion_matrix.png` - 4-class confusion matrices (model vs silver)
+- `confusion_matrix_binary.png` - binary confusion matrices (bridge vs non-bridge)
 
 **Usage examples:**
 
@@ -878,7 +880,7 @@ Downloads raw lidar point clouds for OSM bridges without applying weak supervisi
 
 | Class | Description |
 |-------|-------------|
-| `DownloadFailure` | Enum: `NO_POINTS`, `EXCEPTION` — typed failure reason for download results. |
+| `DownloadFailure` | Enum: `NO_POINTS`, `EXCEPTION` - typed failure reason for download results. |
 
 **CLI arguments:**
 
@@ -953,7 +955,7 @@ data/runs/{run-name}/
 
 ### `scripts/batch_entrypoint.py`
 
-AWS Batch entrypoint — per-bridge processing loop with SPOT handling. Imports `run_inference()` directly (model loaded once). See [AWS Batch Inference](aws-batch-inference.md) for full documentation.
+AWS Batch entrypoint - per-bridge processing loop with SPOT handling. Imports `run_inference()` directly (model loaded once). See [AWS Batch Inference](aws-batch-inference.md) for full documentation.
 
 **Required environment variables:** `S3_BUCKET`, `S3_INPUT_PREFIX`, `S3_MANIFEST_URI`, `S3_MODEL_URI`, `S3_OUTPUT_PREFIX`
 
@@ -980,7 +982,7 @@ See [AWS Batch Inference](aws-batch-inference.md) for detailed usage, examples, 
 
 ### `scripts/audit_outputs.py`
 
-Post-run verification — checks all expected outputs exist in S3. Uses parallel `head_object` checks (200 threads by default).
+Post-run verification - checks all expected outputs exist in S3. Uses parallel `head_object` checks (200 threads by default).
 
 See [AWS Batch Inference](aws-batch-inference.md) for detailed usage, examples, and the profile configuration guide.
 
