@@ -160,7 +160,7 @@ python scripts/submit_batch_job.py \
 
 The `--profile` flag controls which AWS profile is used to read the manifest from S3 (for line counting).
 
-Run tracking (`_run_config.json`) is saved automatically - `s3_bucket` and `s3_output_prefix` are read from terraform outputs. Override with `--bucket` and `--output-prefix` if needed, or via `--env S3_OUTPUT_PREFIX=...` for a different output path.
+Run tracking (`_run_config.json`) is saved automatically - `s3_bucket` and `s3_output_prefix` are read from terraform outputs. Override via `--env S3_BUCKET=...` and `--env S3_OUTPUT_PREFIX=...` for a different output path.
 
 ### 4. Monitor
 
@@ -265,6 +265,7 @@ python scripts/post_run_report.py \
 ```
 
 Use `--batch-profile` when your S3 and Batch/CloudWatch credentials are on different AWS profiles.
+Do not include a trailing slash (/) on `--output-prefix`.
 
 This reads `_run_config.json` (saved at submission), audits S3 outputs, queries CloudWatch for SUMMARY and INFER_OK lines, queries failure reasons for missing bridges, and saves `_run_report.json` to the output prefix.
 

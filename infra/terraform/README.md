@@ -4,7 +4,8 @@ Layered Terraform that provisions **all** AWS resources for the bridge-classific
 
 ## Layout
 
-Three layers, applied in order. Each has its own remote state; each layer's outputs feed the next layer's `terraform.tfvars`:
+Three layers, applied in order.\
+Each has its own remote state; each layer's outputs feed the next layer's `terraform.tfvars`:
 
 ```
 bootstrap ──(state bucket)──▶ foundation ──(subnet IDs, role ARNs)──▶ app
@@ -15,6 +16,9 @@ bootstrap ──(state bucket)──▶ foundation ──(subnet IDs, role ARNs)
 | `bootstrap/` | S3 bucket for Terraform remote state (versioned, encrypted, locked, `prevent_destroy`) | Once per account |
 | `foundation/` | IAM roles + networking (VPC/subnets/SG); networking optional - create fresh or reference an existing VPC | Rarely |
 | `app/` | Workload: ECR repo, CloudWatch log group, Batch compute env / job queue / job definition | Often |
+
+Bootstrap is optional.\
+If you have an existing S3 bucket, skip it and point `backend.hcl` directly at that bucket (see [Using an existing bucket](#using-an-existing-bucket-skip-bootstrap)).
 
 ## Prerequisites
 
@@ -35,7 +39,10 @@ bootstrap ──(state bucket)──▶ foundation ──(subnet IDs, role ARNs)
 Run layers in order; each layer's `terraform output` provides values for the next layer's tfvars.
 Always run `terraform plan` and review the diff before `terraform apply`.
 
-### 1. bootstrap (once per account)
+### 1. bootstrap (once per account, optional)
+
+Creates a dedicated S3 bucket for Terraform remote state.\
+Skip this step if using an existing bucket (see [Using an existing bucket](#using-an-existing-bucket-skip-bootstrap)).
 
 The state bucket can't hold its own state until it exists, so bootstrap locally then migrate:
 
@@ -57,6 +64,34 @@ rm terraform.tfstate terraform.tfstate.backup
 terraform output                                # bucket_name → foundation/app backend.hcl
 ```
 
+#### Using an existing bucket (skip bootstrap)
+
+If your account already has an S3 bucket you want to store state in, skip bootstrap entirely and configure `backend.hcl` in foundation and app to point at it.\
+Use a key prefix to isolate state files from other data in the bucket.
+
+**foundation/backend.hcl:**
+```hcl
+bucket              = "my-existing-bucket"
+key                 = "some-prefix/terraform-state/foundation/terraform.tfstate"
+region              = "us-east-1"
+use_lockfile        = true
+encrypt             = true
+allowed_account_ids = ["<ACCOUNT_ID>"]
+```
+
+**app/backend.hcl:**
+```hcl
+bucket              = "my-existing-bucket"
+key                 = "some-prefix/terraform-state/app/terraform.tfstate"
+region              = "us-east-1"
+use_lockfile        = true
+encrypt             = true
+allowed_account_ids = ["<ACCOUNT_ID>"]
+```
+
+Then proceed to step 2 (foundation).\
+Bucket-level settings (versioning, policies) are managed outside Terraform in this path.
+
 ### 2. foundation
 
 Creates IAM (Batch job / instance / spot-fleet roles + Batch service-linked role) and, by default, networking (VPC + public subnets + SG). Outputs the subnet IDs / SG / role ARNs that `app` consumes.
@@ -73,7 +108,7 @@ terraform output                              # feed these values into app/terra
 
 **Networking toggle.**
 - `create_networking` (default `true`) creates the full VPC - one public subnet per `public_subnet_cidrs` entry, IGW, routing, an S3 gateway endpoint, and the Batch SG.
-- Set it `false` to create **none** of that and instead reference an existing VPC via `existing_subnet_ids` + `existing_security_group_id`.
+- Set it `false` to create **none** of that and instead reference an existing VPC via `existing_subnet_ids` & `existing_security_group_id`.
 - Either way foundation's `subnet_ids` / `batch_security_group_id` outputs resolve to the right values, so `app` is unaffected.
 
 **IAM toggle.**
@@ -85,7 +120,7 @@ terraform output                              # feed these values into app/terra
 
 `data_bucket` scopes the Batch job role to the bucket holding the model / input / predictions.
 
-**Example `terraform.tfvars` for enterprise/sandbox** (existing IAM + existing VPC):
+**Example `terraform.tfvars` for enterprise/sandbox** (existing IAM and existing VPC):
 
 ```hcl
 allowed_account_id = "123456789012"
@@ -204,4 +239,29 @@ Used by `scripts/build_and_push.sh` and `scripts/submit_batch_job.py`.
 
 ## Per-account config
 
-Each account keeps its own `backend.hcl` + `terraform.tfvars` per layer. If the account already has a VPC, set `create_networking = false` and supply its subnet/SG IDs - everything downstream is identical.
+Each account keeps its own `backend.hcl` + `terraform.tfvars` per layer.
+If the account already has a VPC, set `create_networking = false` and supply its subnet/SG IDs - everything downstream is identical.
+
+**Joining an existing deployment.**\
+If state file already exists, clone the repo, copy `backend.hcl.example` to `backend.hcl` in each layer, fill in the same bucket/key/account values, and run `terraform init -backend-config=backend.hcl`.\
+You will connect to the existing state - no apply needed.
+
+**Switching between accounts.**\
+If you previously initialized against a different account, Terraform detects a backend change.
+Use `terraform init -backend-config=backend.hcl -reconfigure` to point at the new backend with empty local state.
+The previous account's state remains untouched in its own backend.
+
+**Importing pre-existing resources.**\
+If the account already has resources that Terraform expects to create (e.g. an ECR repo), `terraform apply` will fail with an "already exists" error.
+Import the resource into state instead:
+```bash
+terraform import aws_ecr_repository.inference bridge-classifier
+```
+After importing, `terraform plan` should show no changes (or minor drift) for that resource.
+
+**Cross-account data bucket.**\
+If `data_bucket` in foundation is in a different AWS account than the Batch infrastructure, both sides must allow access:
+1. Foundation's IAM policy (Terraform handles this) grants the Batch job role access to the bucket.
+2. The bucket policy in the data account must also grant access to the Batch job role from the infra account.
+
+Verify with `aws s3 ls s3://<data-bucket>/ --profile <infra-profile>` before submitting jobs.
