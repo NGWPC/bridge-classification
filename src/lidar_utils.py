@@ -17,18 +17,40 @@ DEFAULT_BUFFER = 10.0
 # --- Bridge filename utilities ---
 
 def safe_source_name(source_name: str) -> str:
-    """Sanitize lidar source name for use in filenames."""
+    """Sanitize lidar source name for use in filenames.
+
+    Args:
+        source_name: Raw lidar source name (may contain slashes, colons, spaces).
+
+    Returns:
+        Filename-safe string with special characters replaced by underscores.
+    """
     safe = source_name.replace('/', '_').replace('\\', '_').replace(':', '_').replace(' ', '_')
     return ''.join(c if c.isalnum() or c in '._-' else '_' for c in safe)
 
 
 def bridge_stem(osm_id: str, source_name: str) -> str:
-    """Construct bridge filename stem: bridge_{osm_id}_{safe_source}."""
+    """Construct bridge filename stem: `bridge_{osm_id}_{safe_source}`.
+
+    Args:
+        osm_id: OpenStreetMap bridge ID.
+        source_name: Raw lidar source name (will be sanitized).
+
+    Returns:
+        Canonical bridge filename stem.
+    """
     return f"bridge_{osm_id}_{safe_source_name(source_name)}"
 
 
 def parse_bridge_stem(stem: str) -> Optional[Tuple[str, str]]:
-    """Parse bridge_{osm_id}_{source} → (osm_id, source) or None."""
+    """Parse `bridge_{osm_id}_{source}` into (osm_id, source) or None.
+
+    Args:
+        stem: Filename stem (without extension).
+
+    Returns:
+        Tuple of (osm_id, source_name), or None if stem doesn't match the expected pattern.
+    """
     if not stem.startswith("bridge_"):
         return None
     rest = stem[len("bridge_"):]
@@ -41,7 +63,15 @@ def parse_bridge_stem(stem: str) -> Optional[Tuple[str, str]]:
 # --- Lidar source discovery ---
 
 def load_lidar_index(path: str, epsg: int = EPSG) -> gpd.GeoDataFrame:
-    """Load lidar_resources.geojson and reproject."""
+    """Load lidar_resources.geojson and reproject to the target CRS.
+
+    Args:
+        path: Path to the GeoJSON file containing USGS 3DEP EPT source geometries.
+        epsg: Target EPSG code for reprojection. Default: 3857 (Web Mercator).
+
+    Returns:
+        GeoDataFrame of lidar sources reprojected to the target CRS.
+    """
     gdf = gpd.read_file(path)
     gdf = gdf.to_crs(epsg=epsg)
     return gdf
@@ -52,9 +82,15 @@ def find_intersecting_sources(
     bridge_geometry: Any,
     buffer_meters: float = DEFAULT_BUFFER,
 ) -> List[Dict[str, str]]:
-    """Return list of {'url': ..., 'name': ...} for sources intersecting the buffered bridge.
+    """Find lidar sources whose footprints intersect the buffered bridge geometry.
 
-    bridge_geometry must be in EPSG:3857 (same CRS as lidar_gdf after load_lidar_index).
+    Args:
+        lidar_gdf: GeoDataFrame of lidar sources (from load_lidar_index).
+        bridge_geometry: Bridge geometry in EPSG:3857 (same CRS as lidar_gdf).
+        buffer_meters: Buffer distance around the bridge geometry. Default: 10.0.
+
+    Returns:
+        List of dicts with 'url' and 'name' keys for each intersecting source.
     """
     if lidar_gdf.empty:
         return []
@@ -84,7 +120,19 @@ def stratified_sample(
     group_key: str = "huc_id",
     id_key: str = "osm_id",
 ) -> List[Dict[str, Any]]:
-    """Round-robin sample across groups, deduplicating by id_key within each group."""
+    """Round-robin sample across groups, deduplicating by id_key within each group.
+
+    Args:
+        entries: List of dicts, each with at least group_key and id_key fields.
+        sample_size: Target number of entries to return.
+        max_per_group: Maximum entries from any single group.
+        seed: Random seed for reproducibility.
+        group_key: Dict key to group by. Default: 'huc_id'.
+        id_key: Dict key for deduplication within groups. Default: 'osm_id'.
+
+    Returns:
+        Sampled list of entries, sorted by (group_key, id_key).
+    """
     rng = random.Random(seed)
 
     by_group = defaultdict(list)

@@ -72,6 +72,6 @@ def audit_s3_outputs(
                     missing.append(line)
                 completed += 1
                 if progress_interval > 0 and completed % progress_interval == 0:
-                    print(f"  Checked {completed}/{total} — {found} found, {len(missing)} missing")
+                    print(f"  Checked {completed}/{total} - {found} found, {len(missing)} missing")
 
     return found, missing

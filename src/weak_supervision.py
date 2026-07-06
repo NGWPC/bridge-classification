@@ -27,14 +27,23 @@ class FailureReason(Enum):
     on all failure reasons with a single enum.
     """
     NO_POINTS = "no_points"
+    """No LiDAR points found in the EPT source for this bridge geometry."""
     RANSAC_INSUFFICIENT = "ransac_insufficient"
+    """Too few points (or unique points) to run RANSAC."""
     RANSAC_FAILED = "ransac_failed"
+    """RANSAC fitting raised an exception."""
     RANSAC_LOW_INLIERS = "ransac_low_inliers"
+    """RANSAC converged but found fewer inliers than min_ransac_inliers."""
     HULL_FAILED = "hull_failed"
+    """Convex hull of RANSAC inliers could not be computed."""
     HIGH_RMSE = "high_rmse"
+    """Inlier RMSE exceeded max_rmse threshold (poor plane fit)."""
     CURVED = "curved"
+    """Bridge skeleton exceeded the linearity deviation threshold (arch or sag)."""
     EXCEPTION = "exception"
+    """Unhandled exception during processing."""
     TIMEOUT = "timeout"
+    """Bridge exceeded the wall-clock timeout (set by caller, not process_bridge)."""
 
 
 @dataclass

@@ -1,39 +1,44 @@
-"""
-Bridge Classification Inference Script
+"""Bridge Classification Inference Script.
 
 Loads a trained Sparse U-Net model, processes raw LAS/LAZ file(s),
 and outputs classified LAS/LAZ file(s) with ASPRS standard codes.
 
 Workflow:
+
 1. Load Model (once).
 2. For each input file:
    a. Load LAS file.
    b. Voxelize points (keep track of which point belongs to which voxel).
    c. Run Model Inference.
-   d. Map Voxel Labels -> Original Points.
+   d. Map Voxel Labels to Original Points.
    e. Save LAS file.
 
 Requires an NVIDIA GPU (spconv-cu120).
 
-Usage (single file, masked mode — bridge deck overlaid on original lidar):
+Example - single file, masked mode (bridge deck overlaid on original lidar):
+    ```bash
     python src/inference.py \
-        --input ./data/ml-data/testing/02050206/bridge_10598181_....laz \
+        --input ./data/ml-data/testing/02050206/bridge_10598181.laz \
         --output ./data/ml-data/prediction.laz \
-        --model ./experiments/bridge-base-v0/.../checkpoints/....ckpt
+        --model ./experiments/bridge-base-v0/checkpoints/best.ckpt
+    ```
 
-Usage (single file, raw mode — all model labels, old behavior):
+Example - single file, raw mode (all model labels):
+    ```bash
     python src/inference.py \
         --input bridge.laz --output pred.laz --model model.ckpt --mode raw
+    ```
 
-Usage (batch via pairs file):
+Example - batch via pairs file:
+    ```bash
     python src/inference.py \
         --pairs-file ./pairs.tsv \
-        --model ./experiments/bridge-base-v0/.../checkpoints/....ckpt \
+        --model ./experiments/bridge-base-v0/checkpoints/best.ckpt \
         --mode masked
+    ```
 
     Where pairs.tsv has one tab-separated line per file:
-        /path/to/input1.laz\t/path/to/output1.laz
-        /path/to/input2.laz\t/path/to/output2.laz
+    `input.laz<TAB>output.laz`
 """
 
 import argparse
@@ -136,7 +141,7 @@ def load_model(checkpoint_path: str, device: torch.device) -> 'SparseUNet':
     return model
 
 
-def run_inference(model, input_path, output_path, voxel_size=0.1, device=torch.device("cuda"), mode='masked') -> InferenceResult:
+def run_inference(model: torch.nn.Module, input_path: str, output_path: str, voxel_size: float = 0.1, device: torch.device = torch.device("cuda"), mode: str = 'masked') -> InferenceResult:
     """Run inference on a single LAS/LAZ file and save the classified result.
 
     Args:
@@ -145,7 +150,7 @@ def run_inference(model, input_path, output_path, voxel_size=0.1, device=torch.d
         output_path: Path to write classified LAS/LAZ file.
         voxel_size: Voxel size in meters (must match training). Default: 0.1.
         device: Device the model is on. Default: cpu.
-        mode: Output mode — 'masked' (bridge deck only, default), 'raw' (all model labels),
+        mode: Output mode - 'masked' (bridge deck only, default), 'raw' (all model labels),
               or 'both' (save raw to output_path and masked alongside it).
 
     Returns:
@@ -221,7 +226,7 @@ def run_inference(model, input_path, output_path, voxel_size=0.1, device=torch.d
             print(f"Saving raw to {output_path}...")
             save_las(output_path, original_arrays, point_labels_las)
 
-            # Masked save — re-load original because save_las mutates original_arrays['Classification']
+            # Masked save - re-load original because save_las mutates original_arrays['Classification']
             _, _, _, original_arrays2 = load_las(input_path)
             masked_labels = apply_bridge_mask(original_arrays2['Classification'], point_labels_model)
             p = Path(input_path)
@@ -326,7 +331,7 @@ def main() -> None:
     if args.pairs_file is None and (args.input is None or args.output is None):
         parser.error("Provide either --input and --output, or --pairs-file.")
 
-    # Device handling — GPU required (spconv-cu120)
+    # Device handling - GPU required (spconv-cu120)
     if not torch.cuda.is_available():
         print("ERROR: CUDA is not available. An NVIDIA GPU is required for inference (spconv-cu120).", flush=True)
         sys.exit(1)

@@ -1,5 +1,5 @@
 """
-Generic S3 operations — client factory, file I/O, URI parsing.
+Generic S3 operations - client factory, file I/O, URI parsing.
 
 Pure S3 logic, no domain-specific code (e.g. no LAS/point cloud handling here).
 """

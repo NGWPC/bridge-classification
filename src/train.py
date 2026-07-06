@@ -1,7 +1,7 @@
-"""
-Bridge Classification Model Training - Data Loader with Voxelization
+"""Bridge Classification Model Training - Data Loader with Voxelization.
 
 This module provides a data loader for bridge point cloud classification with:
+
 - Proper voxelization with feature aggregation and majority-vote labeling
 - Support for HUC-organized directory structure
 - Visualization tools to verify voxelization correctness
@@ -14,6 +14,7 @@ Testing (gold/human-labeled) data is not used during training; use it later
 for final evaluation after model selection.
 
 Usage:
+    ```bash
     # Test data loader (default: --train-dir ./data/ml-data/training)
     python src/train.py --train-dir ./data/ml-data/training
 
@@ -21,10 +22,13 @@ Usage:
     python src/train.py --visualize --sample-idx 0
 
     # Train with explicit validation directory
-    python src/train.py --train --train-dir ./data/ml-data/training --val-dir ./data/ml-data/validation --epochs 50
+    python src/train.py --train --train-dir ./data/ml-data/training \
+        --val-dir ./data/ml-data/validation --epochs 50
 
     # Train with val-split when val-dir not provided
-    python src/train.py --train --train-dir ./data/ml-data/training --val-split 0.2 --epochs 50
+    python src/train.py --train --train-dir ./data/ml-data/training \
+        --val-split 0.2 --epochs 50
+    ```
 """
 
 import os
@@ -94,32 +98,35 @@ class DiceLoss(nn.Module):
 
 
 class BridgeLightningModule(LightningModule):
-    """
-    PyTorch Lightning module for bridge classification training.
+    """PyTorch Lightning module for bridge classification training.
+
+    Wraps SparseUNet with weighted cross-entropy (optionally + Dice) loss,
+    deck-specific metrics (IoU, precision, recall), and ReduceLROnPlateau scheduling.
     """
 
     def __init__(
         self,
-        input_channels=1,
-        num_classes=NUM_CLASSES,
-        base_channels=16,
-        learning_rate=0.001,
-        weight_decay=0.01,
-        class_weights=None,
-        monitor='val_loss',
-        monitor_mode='min',
-        use_dice_loss=False,
+        input_channels: int = 1,
+        num_classes: int = NUM_CLASSES,
+        base_channels: int = 16,
+        learning_rate: float = 0.001,
+        weight_decay: float = 0.01,
+        class_weights: list | None = None,
+        monitor: str = 'val_loss',
+        monitor_mode: str = 'min',
+        use_dice_loss: bool = False,
     ):
         """
         Args:
-            input_channels: Number of input features (default: 1)
-            num_classes: Number of output classes (default: 4)
-            base_channels: Base number of channels (default: 16)
-            learning_rate: Learning rate for optimizer (default: 0.001)
-            weight_decay: Weight decay for optimizer (default: 0.01)
-            class_weights: Class weights for loss function (default: None)
-            monitor: Metric name for ReduceLROnPlateau (default: val_loss)
-            monitor_mode: 'min' or 'max' for ReduceLROnPlateau (default: min)
+            input_channels: Number of input features (default: 1).
+            num_classes: Number of output classes (default: 4).
+            base_channels: Base number of channels for the U-Net encoder (default: 16).
+            learning_rate: Learning rate for AdamW optimizer (default: 0.001).
+            weight_decay: Weight decay for AdamW optimizer (default: 0.01).
+            class_weights: Per-class weights for loss function. If None, uses defaults from calculate_weights.py.
+            monitor: Metric name for ReduceLROnPlateau and checkpointing (default: val_loss).
+            monitor_mode: 'min' or 'max' for ReduceLROnPlateau (default: min).
+            use_dice_loss: If True, use combined 0.5*CE + 0.5*Dice loss (default: False).
         """
         super().__init__()
         self.save_hyperparameters()
@@ -288,9 +295,10 @@ class BridgeLightningModule(LightningModule):
 
 
 class BridgeDataModule(LightningDataModule):
-    """
-    PyTorch Lightning data module for bridge dataset.
+    """PyTorch Lightning data module for bridge dataset.
+
     Uses train_dir and optionally val_dir, or val_split on train_dir when val_dir not set.
+    Handles voxelization config, augmentation flags, and DataLoader setup.
     """
 
     def __init__(
@@ -1020,7 +1028,7 @@ def main() -> None:
             print("Note: --early-stopping requires validation; early stopping not enabled.")
 
         # Create trainer
-        # Determine accelerator and devices — GPU required (spconv-cu120)
+        # Determine accelerator and devices - GPU required (spconv-cu120)
         if args.gpus is None:
             accelerator = "gpu"
             devices = "auto"

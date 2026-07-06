@@ -35,10 +35,11 @@ class BridgeDataset(Dataset):
     ):
         """
         Args:
-            data_dir: Path to directory containing .npy files (can be HUC-organized)
-            voxel_size: Voxel size in meters (e.g., 0.1 for 10cm)
-            augment: Whether to apply random rotations/scaling
-            max_voxels: Maximum voxels per sample; randomly subsample if exceeded (default: None = no limit)
+            data_dir: Path to directory containing .npy files (can be HUC-organized).
+            voxel_size: Voxel size in meters (e.g., 0.1 for 10cm).
+            augment: Whether to apply random Z-rotation and jitter.
+            augment_extra: Extra augmentation (XY-flip, scaling, intensity jitter, point dropout). Requires augment=True.
+            max_voxels: Maximum voxels per sample; randomly subsample if exceeded (default: None = no limit).
         """
         self.data_dir = Path(data_dir)
         self.voxel_size = voxel_size
