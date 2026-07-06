@@ -74,7 +74,7 @@ flowchart TD
 
 The definitive 4-class reference. All other components must agree with this table.
 
-> Source of truth: [`src/constants.py`](../src/constants.py) defines the canonical class labels, ASPRS mappings, and inference modes.
+> Source of truth: [`src/constants.py`](api/core.md) defines the canonical class labels, ASPRS mappings, and inference modes.
 
 | Model Class | Name | Description | ASPRS LAS Input Codes | ASPRS LAS Output Code |
 |-------------|------|-------------|----------------------|-----------------------|

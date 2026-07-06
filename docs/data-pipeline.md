@@ -1,6 +1,6 @@
 # Data Pipeline Walkthrough
 
-This document traces a single bridge from OSM geometry to a classified output file, showing data shapes and transformations at each stage. All directory paths shown below are configurable defaults - pass `--source-dir`, `--silver-dir`, etc. to override. See [Module Reference](module-reference.md) for all CLI arguments.
+This document traces a single bridge from OSM geometry to a classified output file, showing data shapes and transformations at each stage. All directory paths shown below are configurable defaults - pass `--source-dir`, `--silver-dir`, etc. to override. See the [API Reference](api/index.md) for all CLI arguments.
 
 ---
 
