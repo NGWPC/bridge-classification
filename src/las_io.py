@@ -14,9 +14,13 @@ import pdal
 def read_las(filepath: Union[str, Path]) -> Tuple[np.ndarray, Dict[str, Any]]:
     """Read a LAS/LAZ file via PDAL.
 
+    Args:
+        filepath: Path to input LAS/LAZ file.
+
     Returns:
-        arrays: Structured numpy array with all LAS fields (X, Y, Z, Intensity, Classification, etc.)
-        metadata: PDAL pipeline metadata dict.
+        Tuple of (arrays, metadata):
+            arrays: Structured numpy array with all LAS fields (X, Y, Z, Intensity, Classification, etc.).
+            metadata: PDAL pipeline metadata dict.
     """
     pipeline_json = {"pipeline": [{"type": "readers.las", "filename": str(filepath)}]}
     pipeline = pdal.Pipeline(json.dumps(pipeline_json))

@@ -1,57 +1,34 @@
-"""
-HUC-based Bridge Processing Pipeline
+"""HUC-based Bridge Processing Pipeline.
 
 Pipeline for processing bridge lidar data organized by Hydrologic
 Unit Code (HUC) regions. This script finds intersecting lidar sources, applies
 ground filtering and weak supervision rules to generate labeled training data for
 machine learning models.
 
-Input Requirements
-------------------
-Directory Structure:
+Input directory structure:
+
     hucs_dir/
         {huc_id}/
             osm_bridges_lidar_subset__{huc_id}.gpkg
 
-Usage Examples
--------------
-Basic Usage:
+Example:
+    ```bash
     # Process all bridges in all HUCs with default settings
     python src/download_and_weak_supervise_hucs.py
 
-Filtering by HUC:
     # Process bridges in specific HUC regions
     python src/download_and_weak_supervise_hucs.py --hucs 01010001 01010002
 
-Filtering by OSM ID:
-    # Process specific bridges by their OpenStreetMap IDs
-    python src/download_and_weak_supervise_hucs.py --osm-ids 123456 789012
-
-Custom Configuration:
-    # Use custom buffer size and worker count
-    python src/download_and_weak_supervise_hucs.py --buffer 15.0 --workers 8
-
-Resume Processing:
-    # Skip already processed files and bridges that previously had no lidar points (useful for resuming interrupted runs)
+    # Resume processing (skip already processed)
     python src/download_and_weak_supervise_hucs.py --skip-existing
 
-Custom Directories:
-    # Specify custom input/output directories
-    python src/download_and_weak_supervise_hucs.py \
-        --hucs-dir ./data/osm/hucs \
-        --source-dir ./data/ml-data/source \
-        --silver-dir ./data/ml-data/silver_training \
-        --lidar-resources ./data/usgs_entwine/lidar_resources.geojson \
-        --log-dir ./logs
-
-Combined Options:
-    # Process specific HUCs with custom settings
-    python src/download_and_weak_supervise_hucs.py \
-        --hucs 01010001 01010002 \
-        --buffer 12.0 \
-        --workers 16 \
-        --skip-existing \
-        --no-progress
+    # Custom directories and settings
+    python src/download_and_weak_supervise_hucs.py \\
+        --hucs-dir ./data/osm/hucs \\
+        --source-dir ./data/ml-data/source \\
+        --silver-dir ./data/ml-data/silver_training \\
+        --buffer 15.0 --workers 8
+    ```
 """
 
 import geopandas as gpd
