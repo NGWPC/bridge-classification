@@ -20,6 +20,7 @@ See [Architecture](architecture.md) for the classification schema and system des
 | [Architecture](architecture.md) | System design, classification schema, full algorithm details |
 | [Data Pipeline](data-pipeline.md) | Step-by-step data flow with shapes at each stage |
 | [AWS Batch Inference](aws-batch-inference.md) | Scaling inference with AWS Batch array jobs |
+| [Deployment Runbook](deployment-runbook.md) | End-to-end guide: setup, deploy, train, run inference, troubleshoot |
 | [API Reference](api/index.md) | Auto-generated API documentation from source docstrings |
 | [Design Decisions](decisions.md) | Rationale for key architectural choices |
 
