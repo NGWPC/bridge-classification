@@ -21,6 +21,7 @@ nav:
   - Architecture: architecture.md
   - Data Pipeline: data-pipeline.md
   - AWS Batch Inference: aws-batch-inference.md
+  - Deployment Runbook: deployment-runbook.md
   - API Reference:
     - api/index.md
     - Core & Constants: api/core.md
