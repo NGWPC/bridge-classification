@@ -111,14 +111,22 @@ def bridge_timeout_guard(seconds: float) -> Iterator[None]:
     bytecode eval loop runs. This CANNOT interrupt blocking C extensions
     (e.g. PDAL network reads). For C-blocking code, use subprocess-based
     timeout with Process.terminate() instead - see
-    ``_run_bridge_in_subprocess`` in ``download_and_weak_supervise_hucs.py``.
+    `_run_bridge_in_subprocess` in `download_and_weak_supervise_hucs.py`.
 
-    Usage:
+    Args:
+        seconds: Wall-clock timeout in seconds. If <= 0, the guard is a no-op.
+
+    Raises:
+        BridgeTimeout: If the guarded block exceeds the timeout.
+
+    Example:
+        ```python
         try:
             with bridge_timeout_guard(300):
                 result = long_running_operation()
         except BridgeTimeout:
             handle_timeout()
+        ```
     """
     if seconds <= 0:
         yield

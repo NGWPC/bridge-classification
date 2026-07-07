@@ -1,5 +1,7 @@
 site_name: Bridge Classification
 site_description: USGS LiDAR Bridge Point Cloud Classification Pipeline
+repo_url: https://github.com/NGWPC/bridge-classification
+repo_name: NGWPC/bridge-classification
 
 theme:
   name: material
@@ -19,8 +21,39 @@ nav:
   - Architecture: architecture.md
   - Data Pipeline: data-pipeline.md
   - AWS Batch Inference: aws-batch-inference.md
-  - Module Reference: module-reference.md
+  - Deployment Runbook: deployment-runbook.md
+  - API Reference:
+    - api/index.md
+    - Core & Constants: api/core.md
+    - Data I/O & Processing: api/data-io.md
+    - Weak Supervision: api/weak-supervision.md
+    - Model & Training: api/model-training.md
+    - Inference & Cloud: api/inference-cloud.md
+    - Utility Scripts: api/utils.md
+  - Notebooks:
+    - Dataset Overview: notebooks/dataset_overview.ipynb
+    - RANSAC Deck Planes: notebooks/ransac_deck_planes.ipynb
+    - Training Plots: notebooks/training_plots.ipynb
   - Design Decisions: decisions.md
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: ["."]
+          options:
+            docstring_style: google
+            show_source: false
+            show_root_heading: true
+            heading_level: 2
+            separate_signature: true
+            show_signature_annotations: true
+            signature_crossrefs: true
+            members_order: source
+  - mkdocs-jupyter:
+      execute: false
+      include_source: true
 
 markdown_extensions:
   - pymdownx.superfences:

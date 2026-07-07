@@ -1,5 +1,4 @@
-"""
-Bridge Weak Supervision Demo Script
+"""Bridge Weak Supervision Demo Script.
 
 Standalone demo script that processes a small set of target bridges from a
 single lidar dataset. Uses the shared weak_supervision module for the core
@@ -9,8 +8,10 @@ This script is a simplified, single-dataset version of the full HUC-based
 pipeline (download_and_weak_supervise_hucs.py). It is useful for quickly
 testing the weak supervision algorithm on a handful of known bridges.
 
-Usage:
+Example:
+    ```bash
     python src/download_and_weak_supervise_demo.py
+    ```
 """
 
 import os

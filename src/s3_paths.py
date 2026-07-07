@@ -31,7 +31,7 @@ def resolve_input_key(s3_client: Any, bucket: str, input_prefix: str, manifest_l
         Full S3 key string (e.g. 'prefix/02050206/bridge_123.laz').
 
     Raises:
-        FileNotFoundError if no matching object exists in S3.
+        FileNotFoundError: If no matching object exists in S3.
     """
     p = PurePosixPath(manifest_line)
 
@@ -91,8 +91,8 @@ def resolve_output_keys(output_prefix: str, manifest_line: str, ext: str, mode: 
 
     Returns:
         Dict with keys:
-          'primary' - always present (the main output key)
-          'masked'  - present only when mode='both'
+            'primary' - always present (the main output key)
+            'masked'  - present only when mode='both'
 
     Output key patterns:
     - raw:     {output_prefix}/{huc_id}/{stem}_predicted{ext}

@@ -1,14 +1,17 @@
-"""
-Bridge Normalization Preprocessing Script
+"""Bridge Normalization Preprocessing Script.
 
 Processes bridge lidar data from HUC-organized silver_training directory,
 normalizes coordinates and classifications per bridge, and saves normalized
 outputs while preserving HUC folder structure.
 
-Usage:
+Example:
+    ```bash
     python src/preprocess_bridges.py
-    python src/preprocess_bridges.py --input-dir ./data/ml-data/silver_training --output-dir ./data/ml-data/silver_training_normalized
+    python src/preprocess_bridges.py \\
+        --input-dir ./data/ml-data/silver_training \\
+        --output-dir ./data/ml-data/silver_training_normalized
     python src/preprocess_bridges.py --skip-existing --workers 4
+    ```
 """
 
 import os
