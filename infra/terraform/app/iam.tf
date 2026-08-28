@@ -1,9 +1,8 @@
-data "aws_caller_identity" "current" {}
-
 locals {
-  account_id        = data.aws_caller_identity.current.account_id
-  data_bucket_arn   = "arn:aws:s3:::${var.data_bucket}"
-  batch_log_grp_arn = "arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/batch/${var.project_name}:*"
+  account_id           = data.aws_caller_identity.current.account_id
+  partition            = data.aws_partition.current.partition
+  data_bucket_arn      = "arn:${local.partition}:s3:::${var.data_bucket}"
+  inference_image_repo = var.create_ecr ? aws_ecr_repository.inference[0].repository_url : var.inference_image_repo
 }
 
 # ----- Batch job role -----
@@ -74,10 +73,10 @@ resource "aws_iam_instance_profile" "batch_instance" {
 resource "aws_iam_role_policy_attachment" "batch_instance_ecs" {
   count      = var.create_iam ? 1 : 0
   role       = aws_iam_role.batch_instance[0].name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role"
+  policy_arn = "arn:${local.partition}:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role"
 }
 
-# awslogs driver runs under the instance role on EC2 launch type — grant scoped logs.
+# awslogs driver runs under the instance role on EC2 launch type - grant scoped logs.
 resource "aws_iam_role_policy" "batch_instance_logs" {
   count = var.create_iam ? 1 : 0
   name  = "${var.project_name}-batch-instance-logs"
@@ -89,7 +88,7 @@ resource "aws_iam_role_policy" "batch_instance_logs" {
       Sid      = "CloudWatchLogs"
       Effect   = "Allow"
       Action   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
-      Resource = local.batch_log_grp_arn
+      Resource = aws_cloudwatch_log_group.batch.arn
     }]
   })
 }
@@ -113,7 +112,7 @@ resource "aws_iam_role" "spot_fleet" {
 resource "aws_iam_role_policy_attachment" "spot_fleet" {
   count      = var.create_iam ? 1 : 0
   role       = aws_iam_role.spot_fleet[0].name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetTaggingRole"
+  policy_arn = "arn:${local.partition}:iam::aws:policy/service-role/AmazonEC2SpotFleetTaggingRole"
 }
 
 # ----- Batch service-linked role -----
@@ -122,4 +121,25 @@ resource "aws_iam_role_policy_attachment" "spot_fleet" {
 resource "aws_iam_service_linked_role" "batch" {
   count            = var.create_iam && var.create_batch_service_linked_role ? 1 : 0
   aws_service_name = "batch.amazonaws.com"
+}
+
+# ----- Resolved values for consumers (batch.tf) -----
+# Single source of truth: the resource created above when create_iam = true, the matching
+# existing_* input otherwise. Consumers reference these locals, never the resources or the
+# existing_* variables directly.
+
+locals {
+  batch_job_role_arn         = var.create_iam ? aws_iam_role.batch_job[0].arn : var.existing_batch_job_role_arn
+  batch_instance_profile_arn = var.create_iam ? aws_iam_instance_profile.batch_instance[0].arn : var.existing_batch_instance_profile_arn
+  spot_fleet_role_arn        = var.create_iam ? aws_iam_role.spot_fleet[0].arn : var.existing_spot_fleet_role_arn
+
+  # 3-way toggle: create_iam = false takes the existing_* input; create_iam = true with
+  # create_batch_service_linked_role = false falls back to the well-known ARN of the
+  # AWS-managed role (service-linked roles cannot be created twice in one account); both
+  # true resolves to the resource created above.
+  batch_service_role_arn = var.create_iam ? (
+    var.create_batch_service_linked_role
+    ? aws_iam_service_linked_role.batch[0].arn
+    : "arn:${local.partition}:iam::${local.account_id}:role/aws-service-role/batch.amazonaws.com/AWSServiceRoleForBatch"
+  ) : var.existing_batch_service_role_arn
 }

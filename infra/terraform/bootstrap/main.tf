@@ -1,4 +1,5 @@
 data "aws_caller_identity" "current" {}
+data "aws_partition" "current" {}
 
 locals {
   bucket_name = "${var.project_name}-terraform-state-${data.aws_caller_identity.current.account_id}"
@@ -53,21 +54,21 @@ resource "aws_s3_bucket_policy" "state" {
       {
         Sid       = "AllowStateBucketList"
         Effect    = "Allow"
-        Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" }
+        Principal = { AWS = "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:root" }
         Action    = "s3:ListBucket"
         Resource  = aws_s3_bucket.state.arn
       },
       {
         Sid       = "AllowStateFileReadWrite"
         Effect    = "Allow"
-        Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" }
+        Principal = { AWS = "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:root" }
         Action    = ["s3:GetObject", "s3:PutObject"]
         Resource  = "${aws_s3_bucket.state.arn}/*.tfstate"
       },
       {
         Sid       = "AllowLockFileReadWriteDelete"
         Effect    = "Allow"
-        Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" }
+        Principal = { AWS = "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:root" }
         Action    = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
         Resource  = "${aws_s3_bucket.state.arn}/*.tflock"
       },

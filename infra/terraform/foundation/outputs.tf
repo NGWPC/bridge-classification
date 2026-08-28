@@ -1,38 +1,16 @@
-# --- Networking (resolves to created resources, or the existing IDs passed in) ---
-
-output "subnet_ids" {
-  description = "Subnet IDs for the Batch compute environment (→ app)"
-  value       = var.create_networking ? aws_subnet.public[*].id : var.existing_subnet_ids
-}
-
-output "batch_security_group_id" {
-  description = "Security group ID for Batch compute (→ app)"
-  value       = var.create_networking ? aws_security_group.batch[0].id : var.existing_security_group_id
-}
+# --- Networking ---
 
 output "vpc_id" {
-  description = "VPC ID (informational)"
+  description = "VPC ID (created, or the existing VPC ID passed in)"
   value       = var.create_networking ? aws_vpc.main[0].id : var.existing_vpc_id
 }
 
-# --- IAM (resolves to created roles, or the existing ARNs passed in) ---
-
-output "batch_job_role_arn" {
-  description = "Batch job (task) role ARN — job definition jobRoleArn"
-  value       = var.create_iam ? aws_iam_role.batch_job[0].arn : var.existing_batch_job_role_arn
+output "private_subnet_ids" {
+  description = "Private subnet IDs for all workloads (created, or the existing subnet IDs passed in)"
+  value       = var.create_networking ? aws_subnet.private[*].id : var.existing_private_subnet_ids
 }
 
-output "batch_instance_profile_arn" {
-  description = "Batch container instance profile ARN — compute env instance_role"
-  value       = var.create_iam ? aws_iam_instance_profile.batch_instance[0].arn : var.existing_batch_instance_profile_arn
-}
-
-output "spot_fleet_role_arn" {
-  description = "Spot Fleet role ARN — compute env spot_iam_fleet_role"
-  value       = var.create_iam ? aws_iam_role.spot_fleet[0].arn : var.existing_spot_fleet_role_arn
-}
-
-output "batch_service_role_arn" {
-  description = "Batch service-linked role ARN — compute env service_role"
-  value       = var.create_iam ? (var.create_batch_service_linked_role ? aws_iam_service_linked_role.batch[0].arn : "arn:aws:iam::${local.account_id}:role/aws-service-role/batch.amazonaws.com/AWSServiceRoleForBatch") : var.existing_batch_service_role_arn
+output "vpce_security_group_id" {
+  description = "VPC interface endpoints security group ID (empty string if VPC endpoints are not in use)"
+  value       = var.create_networking ? (var.create_vpc_endpoints ? aws_security_group.vpc_endpoints[0].id : "") : var.existing_vpce_security_group_id
 }

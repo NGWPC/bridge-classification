@@ -10,7 +10,7 @@ set -o pipefail
 #   ./scripts/build_and_push.sh
 #
 # AWS_PROFILE: the account where ECR lives (same account as Batch infra).
-# Reads ecr_repository_url and aws_region from Terraform outputs, then
+# Reads inference_image_repo and aws_region from Terraform outputs, then
 # falls back to environment variables. Exits early if required values
 # are missing - no hardcoded defaults.
 # ---------------------------------------------------------------------------
@@ -31,7 +31,9 @@ get_terraform_output() {
 }
 
 _tf_region=$(get_terraform_output aws_region) && AWS_REGION="${AWS_REGION:-$_tf_region}"
-_tf_ecr=$(get_terraform_output ecr_repository_url) && ECR_REPO="${ECR_REPO:-$_tf_ecr}"
+_tf_ecr=$(get_terraform_output inference_image_repo) && ECR_REPO="${ECR_REPO:-$_tf_ecr}"
+_tf_tag=$(get_terraform_output image_tag) && IMAGE_TAG="${IMAGE_TAG:-$_tf_tag}"
+IMAGE_TAG="${IMAGE_TAG:-dev}"
 
 missing=()
 [ -z "$AWS_REGION" ]  && missing+=(AWS_REGION)
@@ -50,7 +52,7 @@ ECR_REGISTRY="${ECR_REPO%%/*}"
 
 # Git SHA tag for traceability and rollback
 GIT_SHA=$(git rev-parse --short HEAD) || { echo "ERROR: not in a git repository" >&2; exit 1; }
-SHA_TAG="${ECR_REPO}:git-${GIT_SHA}"
+SHA_TAG="${ECR_REPO}:sha-${GIT_SHA}"
 
 # 1. Login to ECR
 echo "Logging in to ECR..."
@@ -63,18 +65,18 @@ aws ecr get-login-password \
 echo "Building Docker image (linux/amd64)..."
 docker build --platform linux/amd64 -t bridge-classifier .
 
-# 3. Tag (both :latest and :git-<sha>)
-docker tag bridge-classifier:latest "${ECR_REPO}:latest"
+# 3. Tag (both :$IMAGE_TAG and :sha-<hash>)
+docker tag bridge-classifier:latest "${ECR_REPO}:${IMAGE_TAG}"
 docker tag bridge-classifier:latest "$SHA_TAG"
 
 # 4. Push both tags
 echo "Pushing to ECR..."
-docker push "${ECR_REPO}:latest"
+docker push "${ECR_REPO}:${IMAGE_TAG}"
 docker push "$SHA_TAG"
 
 echo ""
 echo "Done."
-echo "  latest : ${ECR_REPO}:latest"
-echo "  sha    : $SHA_TAG"
+echo "  ${IMAGE_TAG} : ${ECR_REPO}:${IMAGE_TAG}"
+echo "  sha : $SHA_TAG"
 echo ""
-echo "To roll back to this image: docker tag $SHA_TAG ${ECR_REPO}:latest && docker push ${ECR_REPO}:latest"
+echo "To roll back to this image: docker tag $SHA_TAG ${ECR_REPO}:${IMAGE_TAG} && docker push ${ECR_REPO}:${IMAGE_TAG}"

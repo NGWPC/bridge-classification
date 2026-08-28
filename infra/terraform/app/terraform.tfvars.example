@@ -1,32 +1,50 @@
-# Copy to terraform.tfvars and fill in. terraform.tfvars is git-ignored.
-allowed_account_id = "<ACCOUNT_ID>" # REQUIRED — 12-digit account
+# --- Shared (same values across all stacks) ---
+allowed_account_id = "<ACCOUNT_ID>"  # REQUIRED - 12-digit account
+# project_name     = "bridge-classifier"
+# region           = "us-east-1"
 
-# --- From the foundation layer's `terraform output` ---
-subnets                    = ["subnet-...", "subnet-..."]
-batch_security_group_id    = "sg-..."
-batch_job_role_arn         = "arn:aws:iam::<ACCOUNT_ID>:role/bridge-classifier-batch-job"
-batch_instance_profile_arn = "arn:aws:iam::<ACCOUNT_ID>:instance-profile/bridge-classifier-batch-instance"
-spot_fleet_role_arn        = "arn:aws:iam::<ACCOUNT_ID>:role/bridge-classifier-spot-fleet"
-batch_service_role_arn     = "arn:aws:iam::<ACCOUNT_ID>:role/aws-service-role/batch.amazonaws.com/AWSServiceRoleForBatch"
+# --- Networking (from: cd ../foundation && terraform output, or from your existing VPC) ---
+vpc_id             = "vpc-..."
+private_subnet_ids = ["subnet-...", "subnet-..."]
 
-# --- Inference data (S3) ---
-s3_bucket        = "<DATA_BUCKET>"
+# Required only if the VPC has interface endpoints with a shared security group.
+# Leave commented out if egress routes through NAT.
+# vpce_security_group_id = "sg-..."
+
+# --- Container registry (ECR by default, GHCR alternative) ---
+# create_ecr           = true   # false to skip ECR repo (use GHCR or other registry)
+# Required when create_ecr = false:
+# inference_image_repo = "ghcr.io/noaa-owp/bridge-classification"
+
+# --- IAM toggle (optional, defaults shown) ---
+# create_iam                       = true
+# create_batch_service_linked_role = true   # false if the account already has AWSServiceRoleForBatch
+
+# --- IAM existing (required when create_iam = false) ---
+# existing_batch_job_role_arn         = "arn:aws:iam::<ACCOUNT_ID>:role/bridge-classifier-batch-job"
+# existing_batch_instance_profile_arn = "arn:aws:iam::<ACCOUNT_ID>:instance-profile/bridge-classifier-batch-instance"
+# existing_spot_fleet_role_arn        = "arn:aws:iam::<ACCOUNT_ID>:role/bridge-classifier-spot-fleet"
+# existing_batch_service_role_arn     = "arn:aws:iam::<ACCOUNT_ID>:role/aws-service-role/batch.amazonaws.com/AWSServiceRoleForBatch"
+
+# --- Inference data (S3, required) ---
+data_bucket      = "<DATA_BUCKET>"   # scopes the Batch job IAM policy
+s3_bucket        = "<DATA_BUCKET>"   # container env var (usually same as data_bucket)
 s3_input_prefix  = "bridge-classification/runs/<run>/source"
 s3_manifest_uri  = "s3://<DATA_BUCKET>/bridge-classification/runs/<run>/manifest.txt"
 s3_model_uri     = "s3://<DATA_BUCKET>/bridge-classification/models/<model>.ckpt"
 s3_output_prefix = "bridge-classification/runs/<run>/predictions"
 
-# --- Ownership tags (set if required by your org) ---
+# --- Ownership tags (optional) ---
 # team = "your-team"
 # poc  = "your-name"
 
-# --- Optional overrides (defaults shown) ---
-# project_name        = "bridge-classifier"
-# region              = "us-east-1"
+# --- Compute (optional, defaults shown) ---
 # max_vcpus           = 256
 # instance_types      = ["g4dn.xlarge"]
 # use_spot            = true
-# image_tag           = "latest"
+
+# --- Job definition (optional, defaults shown) ---
+# image_tag           = "dev"
 # inference_mode      = "masked"
 # bridge_timeout      = 150
 # job_vcpus           = 3
@@ -34,3 +52,7 @@ s3_output_prefix = "bridge-classification/runs/<run>/predictions"
 # shared_memory_size  = 4096
 # job_timeout_seconds = 28800
 # retry_attempts      = 3
+
+# --- CloudWatch (optional, defaults shown) ---
+# log_retention_days  = 365
+# log_kms_key_arn     = ""   # KMS key ARN for log encryption (empty = no encryption)

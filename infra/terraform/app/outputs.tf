@@ -1,18 +1,23 @@
 # Consumed by scripts/build_and_push.sh and scripts/submit_batch_job.py
 # (via `terraform output` in this directory). Profile is selected with AWS_PROFILE.
 
-output "ecr_repository_url" {
-  description = "ECR repo URL — docker build/push target"
-  value       = aws_ecr_repository.inference.repository_url
+output "inference_image_repo" {
+  description = "Inference image repository (ECR URL when create_ecr = true, external repo when false)"
+  value       = local.inference_image_repo
+}
+
+output "image_tag" {
+  description = "Image tag used by the Batch job definition (passthrough for build script)"
+  value       = var.image_tag
 }
 
 output "job_queue_name" {
-  description = "Batch job queue name — submit target"
+  description = "Batch job queue name - submit target"
   value       = aws_batch_job_queue.inference.name
 }
 
 output "job_definition_name" {
-  description = "Batch job definition name — submit target"
+  description = "Batch job definition name - submit target"
   value       = aws_batch_job_definition.inference.name
 }
 

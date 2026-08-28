@@ -1,7 +1,7 @@
 # ----- Account / general -----
 
 variable "allowed_account_id" {
-  description = "AWS account ID to restrict operations to — prevents accidental apply in the wrong account"
+  description = "AWS account ID to restrict operations to - prevents accidental apply in the wrong account"
   type        = string
 
   validation {
@@ -46,63 +46,121 @@ variable "poc" {
 
 # ----- From the foundation layer (paste from its `terraform output`) -----
 
-variable "subnets" {
-  description = "Subnet IDs for the Batch compute environment (foundation output: subnet_ids)"
+variable "vpc_id" {
+  description = "VPC ID for security groups (foundation output: vpc_id)"
+  type        = string
+
+  validation {
+    condition     = can(regex("^vpc-", var.vpc_id))
+    error_message = "vpc_id must start with 'vpc-'."
+  }
+}
+
+variable "private_subnet_ids" {
+  description = "Private subnet IDs for Batch compute (foundation output: private_subnet_ids)"
   type        = list(string)
 
   validation {
-    condition     = length(var.subnets) > 0 && alltrue([for s in var.subnets : can(regex("^subnet-", s))])
-    error_message = "subnets must be a non-empty list of 'subnet-' IDs."
+    condition     = length(var.private_subnet_ids) > 0 && alltrue([for s in var.private_subnet_ids : can(regex("^subnet-", s))])
+    error_message = "private_subnet_ids must be a non-empty list of 'subnet-' IDs."
   }
 }
 
-variable "batch_security_group_id" {
-  description = "Security group ID for Batch compute (foundation output: batch_security_group_id)"
+variable "vpce_security_group_id" {
+  description = "VPC interface endpoints security group ID (foundation output: vpce_security_group_id). Empty when VPC endpoints are not in use."
   type        = string
+  default     = ""
 
   validation {
-    condition     = can(regex("^sg-", var.batch_security_group_id))
-    error_message = "batch_security_group_id must start with 'sg-'."
+    condition     = var.vpce_security_group_id == "" || can(regex("^sg-", var.vpce_security_group_id))
+    error_message = "vpce_security_group_id must be empty or start with 'sg-'."
   }
 }
 
-variable "batch_job_role_arn" {
-  description = "Batch job (task) role ARN (foundation output: batch_job_role_arn)"
+# ----- IAM: create roles (default), or reference existing ones -----
+
+variable "create_iam" {
+  description = "Create IAM roles for Batch. Set false to reference existing roles via existing_* variables."
+  type        = bool
+  default     = true
+}
+
+variable "create_batch_service_linked_role" {
+  description = "Create the AWSServiceRoleForBatch service-linked role. Set false if the account already has it."
+  type        = bool
+  default     = true
+}
+
+variable "data_bucket" {
+  description = "S3 bucket the inference workload reads (model, input) and writes (predictions). Scopes the Batch job role."
   type        = string
 
   validation {
-    condition     = can(regex("^arn:aws:iam::[0-9]{12}:role/", var.batch_job_role_arn))
-    error_message = "batch_job_role_arn must be an IAM role ARN (arn:aws:iam::<account>:role/...)."
+    condition     = can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", var.data_bucket))
+    error_message = "data_bucket must be a valid S3 bucket name (3-63 chars, lowercase)."
   }
 }
 
-variable "batch_instance_profile_arn" {
-  description = "Batch instance profile ARN (foundation output: batch_instance_profile_arn)"
+variable "existing_batch_job_role_arn" {
+  description = "Existing Batch job role ARN (required when create_iam = false)"
   type        = string
+  default     = ""
 
   validation {
-    condition     = can(regex("^arn:aws:iam::[0-9]{12}:instance-profile/", var.batch_instance_profile_arn))
-    error_message = "batch_instance_profile_arn must be an instance-profile ARN (not a role ARN)."
+    condition     = var.create_iam || can(regex("^arn:aws[a-zA-Z-]*:iam::[0-9]{12}:role/", var.existing_batch_job_role_arn))
+    error_message = "existing_batch_job_role_arn is required (and must be a role ARN) when create_iam = false."
   }
 }
 
-variable "spot_fleet_role_arn" {
-  description = "Spot Fleet role ARN (foundation output: spot_fleet_role_arn)"
+variable "existing_batch_instance_profile_arn" {
+  description = "Existing Batch instance profile ARN (required when create_iam = false)"
   type        = string
+  default     = ""
 
   validation {
-    condition     = can(regex("^arn:aws:iam::[0-9]{12}:role/", var.spot_fleet_role_arn))
-    error_message = "spot_fleet_role_arn must be an IAM role ARN (arn:aws:iam::<account>:role/...)."
+    condition     = var.create_iam || can(regex("^arn:aws[a-zA-Z-]*:iam::[0-9]{12}:instance-profile/", var.existing_batch_instance_profile_arn))
+    error_message = "existing_batch_instance_profile_arn is required (and must be an instance-profile ARN) when create_iam = false."
   }
 }
 
-variable "batch_service_role_arn" {
-  description = "Batch service-linked role ARN (foundation output: batch_service_role_arn)"
+variable "existing_spot_fleet_role_arn" {
+  description = "Existing Spot Fleet role ARN (required when create_iam = false)"
   type        = string
+  default     = ""
 
   validation {
-    condition     = can(regex("^arn:aws:iam::[0-9]{12}:role/", var.batch_service_role_arn))
-    error_message = "batch_service_role_arn must be an IAM role ARN (arn:aws:iam::<account>:role/...)."
+    condition     = var.create_iam || can(regex("^arn:aws[a-zA-Z-]*:iam::[0-9]{12}:role/", var.existing_spot_fleet_role_arn))
+    error_message = "existing_spot_fleet_role_arn is required (and must be a role ARN) when create_iam = false."
+  }
+}
+
+variable "existing_batch_service_role_arn" {
+  description = "Existing Batch service role ARN (required when create_iam = false)"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.create_iam || can(regex("^arn:aws[a-zA-Z-]*:iam::[0-9]{12}:role/", var.existing_batch_service_role_arn))
+    error_message = "existing_batch_service_role_arn is required (and must be a role ARN) when create_iam = false."
+  }
+}
+
+# ----- Container registry -----
+
+variable "create_ecr" {
+  description = "Create ECR repo for the inference image. Set false when using an external registry like GHCR."
+  type        = bool
+  default     = true
+}
+
+variable "inference_image_repo" {
+  description = "Image repository for inference (required when create_ecr = false, e.g. ghcr.io/noaa-owp/bridge-classification)"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.create_ecr || var.inference_image_repo != ""
+    error_message = "inference_image_repo is required when create_ecr = false."
   }
 }
 
@@ -194,9 +252,9 @@ variable "retry_attempts" {
 }
 
 variable "image_tag" {
-  description = "ECR image tag to run (pin a tag to avoid breaking in-flight jobs)"
+  description = "Image tag to run (pin a sha tag to avoid breaking in-flight jobs)"
   type        = string
-  default     = "latest"
+  default     = "dev"
 }
 
 # ----- Inference runtime + data (S3) -----
@@ -224,7 +282,7 @@ variable "bridge_timeout" {
 }
 
 variable "s3_bucket" {
-  description = "S3 bucket holding model/input and receiving predictions (matches foundation data_bucket)"
+  description = "S3 bucket holding model/input and receiving predictions (matches data_bucket, used for IAM scoping)"
   type        = string
 
   validation {
@@ -261,4 +319,23 @@ variable "s3_model_uri" {
 variable "s3_output_prefix" {
   description = "S3 prefix for prediction outputs"
   type        = string
+}
+
+# ----- CloudWatch -----
+
+variable "log_retention_days" {
+  description = "CloudWatch log group retention in days"
+  type        = number
+  default     = 365
+
+  validation {
+    condition     = contains([0, 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653], var.log_retention_days)
+    error_message = "log_retention_days must be a valid CloudWatch retention value (0 = never expire)."
+  }
+}
+
+variable "log_kms_key_arn" {
+  description = "KMS key ARN for CloudWatch log group encryption (empty for no encryption)"
+  type        = string
+  default     = ""
 }

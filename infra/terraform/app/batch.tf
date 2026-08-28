@@ -1,9 +1,25 @@
+# ----- Launch template (IMDSv2, encrypted EBS) -----
+resource "aws_launch_template" "batch" {
+  name_prefix = "${var.project_name}-batch-"
+
+  metadata_options {
+    http_tokens = "required"
+  }
+
+  block_device_mappings {
+    device_name = "/dev/xvda"
+    ebs {
+      encrypted = true
+    }
+  }
+}
+
 # ----- Compute environment (SPOT or on-demand) -----
 resource "aws_batch_compute_environment" "gpu" {
   name         = "${var.project_name}-gpu-${var.use_spot ? "spot" : "ec2"}"
   type         = "MANAGED"
   state        = "ENABLED"
-  service_role = var.batch_service_role_arn
+  service_role = local.batch_service_role_arn
 
   compute_resources {
     type                = var.use_spot ? "SPOT" : "EC2"
@@ -13,13 +29,18 @@ resource "aws_batch_compute_environment" "gpu" {
     desired_vcpus       = 0
     instance_type       = var.instance_types
 
-    subnets             = var.subnets
-    security_group_ids  = [var.batch_security_group_id]
-    instance_role       = var.batch_instance_profile_arn
-    spot_iam_fleet_role = var.use_spot ? var.spot_fleet_role_arn : null
+    subnets             = var.private_subnet_ids
+    security_group_ids  = [aws_security_group.batch.id]
+    instance_role       = local.batch_instance_profile_arn
+    spot_iam_fleet_role = var.use_spot ? local.spot_fleet_role_arn : null
+
+    launch_template {
+      launch_template_id = aws_launch_template.batch.id
+      version            = "$Latest"
+    }
 
     # Batch launches these instances at runtime, outside Terraform, so provider
-    # default_tags don't reach them — replicate them here for cost/ownership tagging.
+    # default_tags don't reach them -replicate them here for cost/ownership tagging.
     tags = merge({
       ManagedBy = "Terraform"
       Project   = var.project_name
@@ -47,9 +68,10 @@ resource "aws_batch_job_queue" "inference" {
 
 # ----- Job definition -----
 resource "aws_batch_job_definition" "inference" {
-  name           = "${var.project_name}-inference"
-  type           = "container"
-  propagate_tags = true
+  name                  = "${var.project_name}-inference"
+  type                  = "container"
+  propagate_tags        = true
+  platform_capabilities = ["EC2"]
 
   timeout {
     attempt_duration_seconds = var.job_timeout_seconds
@@ -69,10 +91,10 @@ resource "aws_batch_job_definition" "inference" {
   }
 
   container_properties = jsonencode({
-    image      = "${aws_ecr_repository.inference.repository_url}:${var.image_tag}"
+    image      = "${local.inference_image_repo}:${var.image_tag}"
     vcpus      = var.job_vcpus
     memory     = var.job_memory
-    jobRoleArn = var.batch_job_role_arn
+    jobRoleArn = local.batch_job_role_arn
     command    = ["python", "/app/scripts/batch_entrypoint.py"]
 
     resourceRequirements = [

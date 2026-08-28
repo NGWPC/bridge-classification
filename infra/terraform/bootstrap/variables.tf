@@ -1,5 +1,5 @@
 variable "allowed_account_id" {
-  description = "AWS account ID to restrict operations to — prevents accidental apply in the wrong account"
+  description = "AWS account ID to restrict operations to - prevents accidental apply in the wrong account"
   type        = string
 
   validation {

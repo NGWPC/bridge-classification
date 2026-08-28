@@ -8,7 +8,7 @@ terraform {
     }
   }
 
-  # First-time setup (new AWS account) — the state bucket can't store its own
+  # First-time setup (new AWS account) - the state bucket can't store its own
   # state until it exists, so bootstrap with local state then migrate:
   #   1. cp backend.hcl.example backend.hcl && cp terraform.tfvars.example terraform.tfvars
   #   2. edit both with your account ID, region, and bucket name

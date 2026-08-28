@@ -1,5 +1,5 @@
 variable "allowed_account_id" {
-  description = "AWS account ID to restrict operations to — prevents accidental apply in the wrong account"
+  description = "AWS account ID to restrict operations to - prevents accidental apply in the wrong account"
   type        = string
 
   validation {
@@ -42,80 +42,24 @@ variable "poc" {
   default     = ""
 }
 
-variable "data_bucket" {
-  description = "S3 bucket the inference workload reads (model, input) and writes (predictions). Scopes the Batch job role."
-  type        = string
-
-  validation {
-    condition     = can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", var.data_bucket))
-    error_message = "data_bucket must be a valid S3 bucket name (3-63 chars, lowercase)."
-  }
-}
-
-# --- IAM: create roles (default), or reference existing ones ---
-
-variable "create_iam" {
-  description = "Create IAM roles for Batch. Set false to reference existing roles via existing_* variables."
-  type        = bool
-  default     = true
-}
-
-variable "create_batch_service_linked_role" {
-  description = "Create the AWSServiceRoleForBatch service-linked role. Set false if the account already has it."
-  type        = bool
-  default     = true
-}
-
-variable "existing_batch_job_role_arn" {
-  description = "Existing Batch job role ARN (required when create_iam = false)"
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = var.create_iam || can(regex("^arn:aws:iam::[0-9]{12}:role/", var.existing_batch_job_role_arn))
-    error_message = "existing_batch_job_role_arn is required (and must be a role ARN) when create_iam = false."
-  }
-}
-
-variable "existing_batch_instance_profile_arn" {
-  description = "Existing Batch instance profile ARN (required when create_iam = false)"
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = var.create_iam || can(regex("^arn:aws:iam::[0-9]{12}:instance-profile/", var.existing_batch_instance_profile_arn))
-    error_message = "existing_batch_instance_profile_arn is required (and must be an instance-profile ARN) when create_iam = false."
-  }
-}
-
-variable "existing_spot_fleet_role_arn" {
-  description = "Existing Spot Fleet role ARN (required when create_iam = false)"
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = var.create_iam || can(regex("^arn:aws:iam::[0-9]{12}:role/", var.existing_spot_fleet_role_arn))
-    error_message = "existing_spot_fleet_role_arn is required (and must be a role ARN) when create_iam = false."
-  }
-}
-
-variable "existing_batch_service_role_arn" {
-  description = "Existing Batch service role ARN (required when create_iam = false)"
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = var.create_iam || can(regex("^arn:aws:iam::[0-9]{12}:role/", var.existing_batch_service_role_arn))
-    error_message = "existing_batch_service_role_arn is required (and must be a role ARN) when create_iam = false."
-  }
-}
-
 # --- Networking: create fresh (default), or reference an existing VPC ---
 
 variable "create_networking" {
-  description = "Create a VPC + public subnets + security group. Set false to reference an existing VPC."
+  description = "Create a VPC with public and private subnets. Set false to reference an existing VPC via existing_* variables."
   type        = bool
   default     = true
+}
+
+variable "enable_nat_gateway" {
+  description = "Create NAT gateway for private subnet internet access (adds ongoing cost)"
+  type        = bool
+  default     = true
+}
+
+variable "create_vpc_endpoints" {
+  description = "Create VPC interface endpoints for ECR (api, dkr) and CloudWatch Logs, so private subnets can reach them without the NAT gateway. Adds per-endpoint hourly and data processing cost. Defaults to false since enable_nat_gateway already covers egress."
+  type        = bool
+  default     = false
 }
 
 variable "vpc_cidr" {
@@ -130,7 +74,7 @@ variable "vpc_cidr" {
 }
 
 variable "public_subnet_cidrs" {
-  description = "Public subnet CIDRs, one per AZ (used only when create_networking = true)"
+  description = "Public subnet CIDRs, one per AZ - NAT gateway placement only (used only when create_networking = true)"
   type        = list(string)
   default     = ["10.0.1.0/24", "10.0.2.0/24"]
 
@@ -145,35 +89,51 @@ variable "public_subnet_cidrs" {
   }
 }
 
+variable "private_subnet_cidrs" {
+  description = "Private subnet CIDRs for all workloads, one per AZ (used only when create_networking = true)"
+  type        = list(string)
+  default     = ["10.0.3.0/24", "10.0.4.0/24"]
+
+  validation {
+    condition     = length(var.private_subnet_cidrs) >= 2
+    error_message = "private_subnet_cidrs must have at least two CIDRs (one per AZ, min 2 for Batch)."
+  }
+
+  validation {
+    condition     = alltrue([for c in var.private_subnet_cidrs : can(cidrhost(c, 0))])
+    error_message = "every entry in private_subnet_cidrs must be valid CIDR notation."
+  }
+}
+
 variable "existing_vpc_id" {
   description = "Existing VPC ID (used only when create_networking = false; informational)"
   type        = string
   default     = ""
 }
 
-variable "existing_subnet_ids" {
-  description = "Existing subnet IDs for Batch (required when create_networking = false)"
+variable "existing_private_subnet_ids" {
+  description = "Existing private subnet IDs for all workloads (required, min 2, when create_networking = false)"
   type        = list(string)
   default     = []
 
   validation {
-    condition     = var.create_networking || length(var.existing_subnet_ids) > 0
-    error_message = "existing_subnet_ids is required when create_networking = false."
+    condition     = var.create_networking || length(var.existing_private_subnet_ids) >= 2
+    error_message = "existing_private_subnet_ids requires at least 2 subnet IDs when create_networking = false."
   }
 
   validation {
-    condition     = alltrue([for s in var.existing_subnet_ids : can(regex("^subnet-", s))])
-    error_message = "every existing_subnet_ids entry must start with 'subnet-'."
+    condition     = alltrue([for s in var.existing_private_subnet_ids : can(regex("^subnet-", s))])
+    error_message = "every existing_private_subnet_ids entry must start with 'subnet-'."
   }
 }
 
-variable "existing_security_group_id" {
-  description = "Existing security group ID for Batch (required when create_networking = false)"
+variable "existing_vpce_security_group_id" {
+  description = "Existing VPC interface endpoints security group ID (used only when create_networking = false; optional, only needed if that VPC has interface endpoints Batch must reach)"
   type        = string
   default     = ""
 
   validation {
-    condition     = var.create_networking || can(regex("^sg-", var.existing_security_group_id))
-    error_message = "existing_security_group_id is required (and must start with 'sg-') when create_networking = false."
+    condition     = var.create_networking || var.existing_vpce_security_group_id == "" || can(regex("^sg-", var.existing_vpce_security_group_id))
+    error_message = "existing_vpce_security_group_id must be empty or start with 'sg-'."
   }
 }

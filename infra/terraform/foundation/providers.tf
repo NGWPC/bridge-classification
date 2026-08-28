@@ -1,7 +1,7 @@
 locals {
   optional_tags = merge(
     var.team != "" ? { Team = var.team } : {},
-    var.poc  != "" ? { POC  = var.poc }  : {},
+    var.poc != "" ? { POC = var.poc } : {},
   )
 }
 
