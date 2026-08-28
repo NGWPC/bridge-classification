@@ -154,7 +154,7 @@ variable "create_ecr" {
 }
 
 variable "inference_image_repo" {
-  description = "Image repository for inference (required when create_ecr = false, e.g. ghcr.io/noaa-owp/bridge-classification)"
+  description = "Image repository for inference (required when create_ecr = false, e.g. ghcr.io/ngwpc/bridge-classification/inference)"
   type        = string
   default     = ""
 
