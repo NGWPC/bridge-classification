@@ -14,6 +14,12 @@ set -o pipefail
 # falls back to environment variables. Exits early if required values
 # are missing - no hardcoded defaults.
 # ---------------------------------------------------------------------------
+#
+# NOTE: The primary image path is GHCR via GitHub Actions
+# (.github/workflows/build-dev-images.yml), which publishes automatically
+# on push to main. This script is the manual ECR path for deployments
+# using create_ecr = true in Terraform.
+# ---------------------------------------------------------------------------
 
 # Check required commands
 for cmd in docker aws git; do

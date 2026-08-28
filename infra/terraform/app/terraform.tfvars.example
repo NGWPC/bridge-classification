@@ -14,7 +14,8 @@ private_subnet_ids = ["subnet-...", "subnet-..."]
 # --- Container registry (ECR by default, GHCR alternative) ---
 # create_ecr           = true   # false to skip ECR repo (use GHCR or other registry)
 # Required when create_ecr = false:
-# inference_image_repo = "ghcr.io/noaa-owp/bridge-classification"
+# inference_image_repo = "ghcr.io/ngwpc/bridge-classification/inference"
+# image_tag           = "dev"
 
 # --- IAM toggle (optional, defaults shown) ---
 # create_iam                       = true
@@ -44,7 +45,6 @@ s3_output_prefix = "bridge-classification/runs/<run>/predictions"
 # use_spot            = true
 
 # --- Job definition (optional, defaults shown) ---
-# image_tag           = "dev"
 # inference_mode      = "masked"
 # bridge_timeout      = 150
 # job_vcpus           = 3

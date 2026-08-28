@@ -10,11 +10,12 @@ Each array child downloads the manifest and model, computes its chunk, then proc
 | File                                 | Purpose                                                            |
 | ------------------------------------ | ------------------------------------------------------------------ |
 | `infra/terraform/bootstrap/`         | S3 bucket for Terraform remote state (once per account)            |
-| `infra/terraform/foundation/`        | IAM roles + networking (VPC or reference existing)                 |
-| `infra/terraform/app/`               | Workload: ECR, compute env, queue, job definition                  |
+| `infra/terraform/foundation/`        | Networking (VPC, subnets - optional, skip if using existing VPC)   |
+| `infra/terraform/app/`               | Workload: IAM, ECR (optional), compute env, queue, job definition  |
 | `infra/terraform/app/terraform.tfvars` | All configurable values - gitignored; copy from `.tfvars.example`|
 | `infra/terraform/app/terraform.tfvars.example` | Template with placeholder values for new setups          |
-| `scripts/build_and_push.sh`          | Build Docker image and push to ECR                                 |
+| `.github/workflows/build-dev-images.yml` | Build and publish image to GHCR (automatic on push to main)    |
+| `scripts/build_and_push.sh`          | Build Docker image and push to ECR (manual, when `create_ecr = true`) |
 | `scripts/submit_batch_job.py`        | Submit single or array batch jobs                                  |
 | `scripts/batch_entrypoint.py`        | Container entrypoint - per-bridge processing loop                  |
 | `scripts/audit_outputs.py`           | Post-run verification - checks all expected outputs exist in S3    |
@@ -66,7 +67,7 @@ Each child processes bridges **one at a time** in a loop:
 
 ## Prerequisites
 
-- AWS account with IAM permissions for Batch, ECR, S3
+- AWS account with IAM permissions for Batch and S3 (ECR permissions also needed when `create_ecr = true`)
 - [Terraform](https://developer.hashicorp.com/terraform/install) installed
 - Docker installed (for building inference images)
 - Python environment for management scripts (job submission, audit, reporting):
@@ -88,7 +89,7 @@ Each child processes bridges **one at a time** in a loop:
 
 ## AWS Profile Configuration
 
-All scripts use `AWS_PROFILE` as the primary credential source. Set it to the account where infrastructure was deployed (Batch, ECR, CloudWatch):
+All scripts use `AWS_PROFILE` as the primary credential source. Set it to the account where infrastructure was deployed (Batch, CloudWatch):
 
 ```bash
 export AWS_PROFILE=my-profile
@@ -96,7 +97,7 @@ export AWS_PROFILE=my-profile
 
 **Single account** (infra and data in the same account) - this is all you need. Every script falls back to `AWS_PROFILE` for all AWS access.
 
-**Cross-account** (S3 data in a different account than Batch infra) - pass `--profile` to specify the S3 data profile. `AWS_PROFILE` still controls Batch/ECR/CloudWatch access:
+**Cross-account** (S3 data in a different account than Batch infra) - pass `--profile` to specify the S3 data profile. `AWS_PROFILE` still controls Batch/CloudWatch access:
 
 ```bash
 # Submit: Batch uses AWS_PROFILE, manifest is read via --profile
@@ -108,7 +109,7 @@ python scripts/post_run_report.py --bucket my-bucket --output-prefix my-output-p
 
 | Script | `AWS_PROFILE` | `--profile` | `--batch-profile` |
 |--------|---------------|-------------|-------------------|
-| `build_and_push.sh` | ECR login + push | - | - |
+| `build_and_push.sh` | ECR login + push (when using ECR) | - | - |
 | `submit_batch_job.py` | Batch job submission | S3 manifest access (optional) | - |
 | `audit_outputs.py` | - | S3 output checks | - |
 | `post_run_report.py` | - | S3 audit | Batch/CloudWatch queries (optional) |
@@ -119,7 +120,7 @@ python scripts/post_run_report.py --bucket my-bucket --output-prefix my-output-p
 
 ### 1. Configure & Deploy Infrastructure
 
-Follow [`infra/terraform/README.md`](../infra/terraform/README.md) to deploy all three layers (bootstrap → foundation → app). Each layer has a `backend.hcl.example` and `terraform.tfvars.example` - copy both and fill in your values. Bootstrap and foundation are applied once per account; for day-to-day config changes (S3 paths, model URI, instance types), only the app layer needs re-applying:
+Follow [`infra/terraform/README.md`](../infra/terraform/README.md) to deploy infrastructure. Only the app layer is required; bootstrap and foundation are optional (see Terraform README for when to use each). Each layer has a `backend.hcl.example` and `terraform.tfvars.example` - copy both and fill in your values. For day-to-day config changes (S3 paths, model URI, instance types), only the app layer needs re-applying:
 
 ```bash
 cd infra/terraform/app && terraform plan && terraform apply
@@ -128,6 +129,12 @@ cd infra/terraform/app && terraform plan && terraform apply
 See [Configuration Reference](#configuration-reference) for all app-layer variables.
 
 ### 2. Build and Push Docker Image
+
+**GHCR (default):** images are published automatically on push to main by the `build-dev-images` GitHub Actions workflow.
+Tags: `sha-<short>` (immutable) + `dev` (floating).
+No manual steps needed.
+
+**ECR (manual, when `create_ecr = true`):**
 
 ```bash
 export AWS_PROFILE=my-profile
@@ -273,15 +280,15 @@ Use `--skip-timing` for a faster report without per-bridge p50/p95 stats.
 
 ### 7. Cleanup
 
-To tear down all Batch infrastructure, destroy layers in reverse order:
+To tear down Batch infrastructure, destroy layers in reverse order:
 
 ```bash
-cd infra/terraform/app && terraform destroy        # workload (ECR, Batch)
-cd ../foundation && terraform destroy              # IAM roles + networking
+cd infra/terraform/app && terraform destroy        # workload (IAM, ECR if created, Batch)
+cd ../foundation && terraform destroy              # networking (if deployed)
 cd ../bootstrap && terraform destroy               # state bucket (optional - safe to keep)
 ```
 
-Destroying `app` alone is usually sufficient (removes ECR, compute env, queue, job def). Foundation and bootstrap are shared infrastructure rarely torn down. S3 data is not affected.
+Destroying `app` alone is usually sufficient (removes IAM, compute env, queue, job def, and ECR if `create_ecr = true`). Foundation and bootstrap are shared infrastructure rarely torn down. S3 data is not affected.
 
 ---
 
@@ -368,7 +375,7 @@ One bridge per line. Extensionless or with extension:
 11010009/bridge_1234567_USGS_Some_Dataset.las
 ```
 
-If a line has no extension, the entrypoint probes S3 for `.laz` first, then `.las` via `head_object`. .
+If a line has no extension, the entrypoint probes S3 for `.laz` first, then `.las` via `head_object`.
 
 The split manifest produced by `utils/split_data.py` (`split_test_ids.txt`) is directly usable.
 
@@ -444,7 +451,7 @@ All Batch resources are tagged with `Project = bridge-classifier`. Tags propagat
 
 **GPU out of memory**: Large bridges with dense point clouds can exceed GPU memory. Use a larger instance or increase `--voxel-size` (coarser voxels = fewer voxels = less memory).
 
-**S3 permission denied**: The Batch job IAM role is managed by the foundation layer and scoped to the `data_bucket`. Verify that `s3_bucket` in the app tfvars matches `data_bucket` in the foundation tfvars.
+**S3 permission denied**: The Batch job IAM role is managed by the app layer and scoped to the `data_bucket`. Verify that `s3_bucket` matches `data_bucket` in the app tfvars.
 
 **SPOT instance interruptions**: The job definition auto-retries up to `retry_attempts` times on SPOT interruption. Combined with skip-if-exists, retries are cheap. For critical runs with no tolerance for delay, set `use_spot = false`.
 
