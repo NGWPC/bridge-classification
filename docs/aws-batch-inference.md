@@ -120,7 +120,7 @@ python scripts/post_run_report.py --bucket my-bucket --output-prefix my-output-p
 
 ### 1. Configure & Deploy Infrastructure
 
-Follow [`infra/terraform/README.md`](../infra/terraform/README.md) to deploy infrastructure. Only the app layer is required; bootstrap and foundation are optional (see Terraform README for when to use each). Each layer has a `backend.hcl.example` and `terraform.tfvars.example` - copy both and fill in your values. For day-to-day config changes (S3 paths, model URI, instance types), only the app layer needs re-applying:
+Follow [`infra/terraform/README.md`](terraform-reference.md) to deploy infrastructure. Only the app layer is required; bootstrap and foundation are optional (see Terraform README for when to use each). Each layer has a `backend.hcl.example` and `terraform.tfvars.example` - copy both and fill in your values. For day-to-day config changes (S3 paths, model URI, instance types), only the app layer needs re-applying:
 
 ```bash
 cd infra/terraform/app && terraform plan && terraform apply
@@ -383,7 +383,7 @@ The split manifest produced by `utils/split_data.py` (`split_test_ids.txt`) is d
 
 ## Configuration Reference
 
-See [`infra/terraform/README.md`](../infra/terraform/README.md#app-variable-reference) for the full variable reference and [app outputs](../infra/terraform/README.md#app-outputs).
+See [`infra/terraform/README.md`](terraform-reference.md#app-variable-reference) for the full variable reference and [app outputs](terraform-reference.md#app-outputs).
 
 
 ---
